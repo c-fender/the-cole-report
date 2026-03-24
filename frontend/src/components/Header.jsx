@@ -14,7 +14,7 @@ export default function Header({ lastRefresh, onRefresh, loading, activeTab, onT
           <img src="/Headshot.JPEG" alt="Cole Report" className="logo" />
           <div className="brand">
             <h1>The Cole Report</h1>
-            <span className="subtitle">market metrics & headlines</span>
+            <span className="subtitle">market metrics</span>
           </div>
         </div>
         <div className="header-right">

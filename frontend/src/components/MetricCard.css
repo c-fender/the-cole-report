@@ -21,10 +21,14 @@
 .metric-value {
   font-size: 1.25rem;
   font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .metric-value .value {
-  color: var(--accent-green);
+  color: var(--text-primary);
 }
 
 .metric-value .error {
@@ -34,4 +38,46 @@
 
 .metric-value .loading {
   color: var(--text-muted);
+}
+
+.metric-change {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.metric-change-up {
+  color: var(--accent-red);
+}
+
+.metric-change-down {
+  color: var(--accent-green);
+}
+
+.metric-details {
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--bg-tertiary);
+  padding-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.metric-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+}
+
+.metric-detail-label {
+  color: var(--text-muted);
+}
+
+.metric-detail-value {
+  color: var(--text-primary);
+}
+
+.metric-details .metric-change {
+  font-size: 0.75rem;
 }

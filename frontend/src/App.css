@@ -23,13 +23,43 @@
   margin-bottom: 2rem;
 }
 
-.tab-content .metric-card,
-.tab-content .weather-card {
+.tab-content .metric-card {
   max-width: 320px;
 }
 
-.news-section {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 2rem;
+.tab-content .weather-card {
+  max-width: 720px;
+  width: 100%;
+}
+
+.oil-panel {
+  max-width: 360px;
+}
+
+.oil-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.oil-header code {
+  color: var(--accent-blue);
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.oil-header a {
+  color: var(--accent-blue);
+  text-decoration: none;
+}
+
+.oil-header a:hover {
+  text-decoration: underline;
 }

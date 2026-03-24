@@ -31,7 +31,7 @@ export default function GasCard({ data, title, sourceUrl, defaultExpanded = fals
   const error = data?.error;
   const rows = data?.rows || [];
   const url = sourceUrl || 'https://gasprices.aaa.com/';
-  const displayTitle = title || 'National Average Gas Prices';
+  const displayTitle = title || 'National';
   const currentRow = rows.find((r) => r.label === 'current');
   const yesterdayRow = rows.find((r) => r.label === 'yesterday');
   const currentRegular = currentRow?.regular != null ? formatPrice(currentRow.regular) : '—';
