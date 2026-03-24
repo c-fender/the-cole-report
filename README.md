@@ -76,3 +76,4 @@ cd frontend && npm install && npm run dev
 - **Gas prices**: Scraped from AAA [gasprices.aaa.com](https://gasprices.aaa.com/) — no API key needed.
 - **Crude**: Alpha Vantage returns WTI by default. The card is labeled Brent; you can swap the API for a Brent-specific source if desired.
 - **News**: NewsAPI free tier limits past 12-hour queries; older stories may not appear.
+"# the-cole-report" 
