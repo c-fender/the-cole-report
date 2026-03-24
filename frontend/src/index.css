@@ -1,0 +1,44 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg-primary: #0a0e14;
+  --bg-secondary: #0d1219;
+  --bg-tertiary: #151b24;
+  --border: #1f2937;
+  --text-primary: #c9d1d9;
+  --text-muted: #6b7280;
+  --accent-blue: #58a6ff;
+  --accent-green: #39d353;
+  --accent-red: #ff7b72;
+  --accent-amber: #d29922;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+body {
+  font-family: var(--font-mono);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+/* Subtle terminal-style scanline overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
