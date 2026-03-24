@@ -23,13 +23,23 @@ async function proxyFetch(url, errorMsg = 'Failed to fetch data') {
   }
 }
 
-// Brent Crude (Alpha Vantage - WTI/Crude symbol)
+// Brent Crude (EIA)
 app.get('/api/brent', async (req, res) => {
-  const key = process.env.ALPHA_VANTAGE_API_KEY;
-  if (!key) return res.json({ error: 'ALPHA_VANTAGE_API_KEY not set' });
-  const url = `https://www.alphavantage.co/query?function=CRUDE_OIL&interval=daily&apikey=${key}`;
+  const key = process.env.EIA_API_KEY;
+  if (!key) return res.json({ error: 'EIA_API_KEY not set' });
+  const url = `https://api.eia.gov/series/?series_id=PET.RBRTE.D&api_key=${key}`;
   const data = await proxyFetch(url, 'Brent fetch failed');
-  res.json(data);
+  if (data?.error) return res.json(data);
+
+  // Normalize to the same shape used by the frontend
+  const points = Array.isArray(data?.series?.[0]?.data) ? data.series[0].data : [];
+  const normalized = points.map((p) => ({ date: p[0], value: p[1] }));
+  res.json({
+    name: 'Brent Crude Oil Spot Price',
+    interval: 'daily',
+    unit: 'dollars per barrel',
+    data: normalized,
+  });
 });
 
 // US 10Y Treasury (Alpha Vantage FRED)

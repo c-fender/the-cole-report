@@ -8,7 +8,8 @@ A sleek, terminal-style dashboard for tracking gas prices, crude oil, US 10Y Tre
 
 | Service | Purpose | Sign up |
 |---------|---------|---------|
-| Alpha Vantage | Crude Oil, US 10Y Treasury | [alphavantage.co](https://www.alphavantage.co/support/#api-key) |
+| Alpha Vantage | US 10Y Treasury | [alphavantage.co](https://www.alphavantage.co/support/#api-key) |
+| EIA | Brent Crude | [eia.gov/opendata](https://www.eia.gov/opendata/register.php) |
 | NewsAPI | Domestic & international headlines | [newsapi.org](https://newsapi.org/register) |
 | OpenWeatherMap | Charlotte weather | [openweathermap.org](https://openweathermap.org/api) |
 
@@ -74,6 +75,6 @@ cd frontend && npm install && npm run dev
 ## Notes
 
 - **Gas prices**: Scraped from AAA [gasprices.aaa.com](https://gasprices.aaa.com/) — no API key needed.
-- **Crude**: Alpha Vantage returns WTI by default. The card is labeled Brent; you can swap the API for a Brent-specific source if desired.
+- **Crude**: Pulled from EIA Brent series (`PET.RBRTE.D`) using `EIA_API_KEY`.
 - **News**: NewsAPI free tier limits past 12-hour queries; older stories may not appear.
 "# the-cole-report" 

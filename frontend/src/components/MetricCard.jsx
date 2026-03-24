@@ -1,8 +1,8 @@
 import './MetricCard.css';
 
 export default function MetricCard({ title, data, parse }) {
-  const rawError = data?.error ?? data?.['Error Message'] ?? data?.Note;
-  const error = typeof rawError === 'string' && rawError.includes('rate limit')
+  const rawError = data?.error ?? data?.['Error Message'] ?? data?.Note ?? data?.Information;
+  const error = typeof rawError === 'string' && rawError.toLowerCase().includes('rate limit')
     ? 'Rate limited'
     : rawError;
   const value = !error && data ? parse(data) : null;
