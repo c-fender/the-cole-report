@@ -27,13 +27,13 @@ async function proxyFetch(url, errorMsg = 'Failed to fetch data') {
 app.get('/api/brent', async (req, res) => {
   const key = process.env.EIA_API_KEY;
   if (!key) return res.json({ error: 'EIA_API_KEY not set' });
-  const url = `https://api.eia.gov/series/?series_id=PET.RBRTE.D&api_key=${key}`;
+  const url = `https://api.eia.gov/v2/seriesid/PET.RBRTE.D?api_key=${key}`;
   const data = await proxyFetch(url, 'Brent fetch failed');
   if (data?.error) return res.json(data);
 
   // Normalize to the same shape used by the frontend
-  const points = Array.isArray(data?.series?.[0]?.data) ? data.series[0].data : [];
-  const normalized = points.map((p) => ({ date: p[0], value: p[1] }));
+  const points = Array.isArray(data?.response?.data) ? data.response.data : [];
+  const normalized = points.map((p) => ({ date: p.period, value: p.value }));
   res.json({
     name: 'Brent Crude Oil Spot Price',
     interval: 'daily',
