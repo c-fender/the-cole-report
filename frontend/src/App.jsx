@@ -13,6 +13,7 @@ function App() {
   const [metrics, setMetrics] = useState({
     gas: null,
     gasNc: null,
+    gasSc: null,
     gasCharlotte: null,
     brent: null,
     treasury: null,
@@ -26,9 +27,10 @@ function App() {
     const apiBase = import.meta.env.VITE_API_URL || '';
     const base = apiBase ? `${apiBase}/api` : '/api';
     try {
-      const [gas, gasNc, gasCharlotte, brent, treasury, weather, domestic, international] = await Promise.all([
+      const [gas, gasNc, gasSc, gasCharlotte, brent, treasury, weather, domestic, international] = await Promise.all([
         fetch(`${base}/gas`).then((r) => r.json()),
         fetch(`${base}/gas/nc`).then((r) => r.json()),
+        fetch(`${base}/gas/sc`).then((r) => r.json()),
         fetch(`${base}/gas/charlotte`).then((r) => r.json()),
         fetch(`${base}/brent`).then((r) => r.json()),
         fetch(`${base}/treasury`).then((r) => r.json()),
@@ -36,7 +38,7 @@ function App() {
         fetch(`${base}/news`).then((r) => r.json()),
         fetch(`${base}/news/international`).then((r) => r.json()),
       ]);
-      setMetrics({ gas, gasNc, gasCharlotte, brent, treasury, weather });
+      setMetrics({ gas, gasNc, gasSc, gasCharlotte, brent, treasury, weather });
       setNews({ domestic, international });
       setLastRefresh(new Date());
     } catch (err) {
@@ -68,16 +70,25 @@ function App() {
               data={metrics.gas}
               title="National Average Gas Prices"
               sourceUrl="https://gasprices.aaa.com/"
+              defaultExpanded
             />
             <GasCard
               data={metrics.gasNc}
               title="North Carolina Average Gas Prices"
               sourceUrl="https://gasprices.aaa.com/?state=NC"
+              defaultExpanded
+            />
+            <GasCard
+              data={metrics.gasSc}
+              title="South Carolina Average Gas Prices"
+              sourceUrl="https://gasprices.aaa.com/?state=SC"
+              defaultExpanded
             />
             <GasCard
               data={metrics.gasCharlotte}
               title="Charlotte-Gastonia-Rock Hill (NC Only) Average Gas Prices"
               sourceUrl="https://gasprices.aaa.com/?state=NC"
+              defaultExpanded
             />
           </section>
         )}

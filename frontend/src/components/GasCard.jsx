@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import './GasCard.css';
 
 const ROW_LABELS = {
@@ -26,13 +26,16 @@ function getDoDIndicator(currentRow, yesterdayRow, col) {
   return change > 0 ? { dir: '↑', amt } : { dir: '↓', amt };
 }
 
-export default function GasCard({ data, title, sourceUrl }) {
+export default function GasCard({ data, title, sourceUrl, defaultExpanded = false }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const error = data?.error;
   const rows = data?.rows || [];
   const url = sourceUrl || 'https://gasprices.aaa.com/';
   const displayTitle = title || 'National Average Gas Prices';
   const currentRow = rows.find((r) => r.label === 'current');
   const yesterdayRow = rows.find((r) => r.label === 'yesterday');
+  const currentRegular = currentRow?.regular != null ? formatPrice(currentRow.regular) : '—';
+  const regularDoD = getDoDIndicator(currentRow, yesterdayRow, 'regular');
 
   if (error) {
     return (
@@ -52,16 +55,37 @@ export default function GasCard({ data, title, sourceUrl }) {
   }
 
   return (
-    <article className="gas-card gas-card-full">
-      <div className="gas-header">
-        <span className="gas-title">
-          {displayTitle} (
-          <a href={url} target="_blank" rel="noopener noreferrer" className="gas-source-link">
-            <em>Source</em>
-          </a>
-          )
+    <article className="gas-card gas-card-full gas-card-accordion">
+      <button
+        type="button"
+        className="gas-accordion-header"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+      >
+        <div className="gas-accordion-left">
+          <span className="gas-accordion-title">
+            {displayTitle} (
+            <a href={url} target="_blank" rel="noopener noreferrer" className="gas-source-link" onClick={(e) => e.stopPropagation()}>
+              <em>Source</em>
+            </a>
+            )
+          </span>
+          {!expanded && (
+            <span className="gas-accordion-preview">
+              {currentRegular} Reg
+              {regularDoD != null && regularDoD.dir !== '—' && (
+                <span className={`gas-accordion-dod gas-dod-${regularDoD.dir === '↑' ? 'up' : 'down'}`}>
+                  {' '}{regularDoD.dir} ${regularDoD.amt} DoD
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+        <span className={`gas-accordion-chevron ${expanded ? 'expanded' : ''}`}>
+          {expanded ? '▾' : '▶'}
         </span>
-      </div>
+      </button>
+      {expanded && (
       <div className="gas-table-wrap">
         <table className="gas-table gas-table-with-dod">
           <thead>
@@ -100,6 +124,7 @@ export default function GasCard({ data, title, sourceUrl }) {
           </tbody>
         </table>
       </div>
+      )}
     </article>
   );
 }

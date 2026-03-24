@@ -98,6 +98,17 @@ app.get('/api/gas/nc', async (req, res) => {
   }
 });
 
+// Gas prices - South Carolina
+app.get('/api/gas/sc', async (req, res) => {
+  try {
+    const data = await scrapeGasPrices('https://gasprices.aaa.com/?state=SC');
+    res.json(data);
+  } catch (err) {
+    console.error('AAA SC gas scrape failed', err.message);
+    res.json({ error: 'AAA SC gas scrape failed', details: err.message });
+  }
+});
+
 // Gas prices - Charlotte-Gastonia-Rock Hill (NC only)
 // Table is inside accordion: h3 (Charlotte header) + next div (panel) contains the table
 app.get('/api/gas/charlotte', async (req, res) => {
