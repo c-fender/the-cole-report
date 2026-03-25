@@ -1,0 +1,136 @@
+.chess-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  font-family: var(--font-mono);
+  max-width: min(100%, 720px);
+  width: 100%;
+}
+
+.chess-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.chess-title {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.chess-head a {
+  color: var(--accent-blue);
+  text-decoration: none;
+  font-size: 0.75rem;
+}
+
+.chess-head a:hover {
+  text-decoration: underline;
+}
+
+.chess-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.chess-board-wrap {
+  width: min(100%, 360px);
+  margin-bottom: 0.8rem;
+}
+
+.chess-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.chess-move {
+  font-size: 1rem;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.45rem;
+}
+
+.chess-btn {
+  padding: 0.25rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent-blue);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.75rem;
+}
+
+.chess-btn:hover {
+  background: var(--bg-tertiary);
+}
+
+.chess-guess-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0 0 0.6rem;
+}
+
+.chess-guess-input {
+  width: min(320px, 100%);
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: inherit;
+  outline: none;
+}
+
+.chess-guess-input:focus {
+  border-color: rgba(88, 166, 255, 0.6);
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
+}
+
+.chess-result {
+  font-size: 0.8rem;
+  margin: 0 0 0.45rem;
+}
+
+.chess-result-correct {
+  color: var(--accent-green);
+}
+
+.chess-result-wrong {
+  color: var(--accent-red);
+}
+
+.chess-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.chess-fen {
+  overflow-wrap: anywhere;
+}
+
+.chess-sep {
+  opacity: 0.6;
+}
+
+.chess-error {
+  color: var(--accent-red);
+  font-size: 0.8rem;
+}
+

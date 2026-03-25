@@ -88,6 +88,40 @@
   border-top: 1px solid var(--border);
 }
 
+.weather-commute {
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  position: relative;
+}
+
+.weather-commute-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.weather-commute strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.weather-radar-link {
+  position: absolute;
+  top: 0.75rem;
+  right: 0;
+  font-size: 0.75rem;
+  color: var(--accent-blue);
+  text-decoration: none;
+}
+
+.weather-radar-link:hover {
+  text-decoration: underline;
+}
+
 .weather-forecast-label {
   font-size: 0.65rem;
   text-transform: uppercase;

@@ -41,7 +41,9 @@ export default function GasBuddySearch() {
     <section className="gb-widget">
       <div className="gb-head">
         <span className="gb-title">Search by Zip Code</span>
-        <span className="gb-subtitle">GasBuddy (opens in new tab)</span>
+        <span className="gb-subtitle">
+          <em>(GasBuddy - opens in new tab)</em>
+        </span>
       </div>
 
       <form className="gb-form" onSubmit={onSubmit}>

@@ -1,4 +1,5 @@
 import './WeatherCard.css';
+import RadarWidget from './RadarWidget';
 
 function formatSlotTime(dtSec, timeZone) {
   if (dtSec == null) return '—';
@@ -10,7 +11,7 @@ function formatSlotTime(dtSec, timeZone) {
   });
 }
 
-export default function WeatherCard({ data }) {
+export default function WeatherCard({ data, apiBase }) {
   const error = data?.error;
   const current = data?.current ?? (data?.main && !data?.next24h ? data : null);
   const tz = data?.timeZone || 'America/New_York';
@@ -22,6 +23,9 @@ export default function WeatherCard({ data }) {
   const wind = current?.wind?.speed;
   const todayRange = data?.todayRange;
   const next24h = Array.isArray(data?.next24h) ? data.next24h : [];
+  const commute = data?.commute;
+  const defaultLat = current?.coord?.lat ?? null;
+  const defaultLon = current?.coord?.lon ?? null;
 
   return (
     <article className="weather-card">
@@ -64,6 +68,43 @@ export default function WeatherCard({ data }) {
                 <span className="weather-lo">L {todayRange.low}°</span>
               </div>
             )}
+
+            {commute && (
+              <div className="weather-commute">
+                <div className="weather-forecast-label">Commute</div>
+                <div className="weather-commute-row">
+                  <span className="weather-commute-item">
+                    Next 2h:{' '}
+                    <strong>
+                      {commute?.next2h?.maxPop != null ? `${commute.next2h.maxPop}%` : '--'}
+                    </strong>{' '}
+                    rain
+                    {commute?.next2h?.precipIn != null ? ` (${commute.next2h.precipIn} in)` : ''}
+                  </span>
+                  <span className="weather-meta-sep">·</span>
+                  <span className="weather-commute-item">
+                    AM ({commute?.am?.label ?? '7–9am'}):{' '}
+                    <strong>{commute?.am?.maxPop != null ? `${commute.am.maxPop}%` : '--'}</strong>
+                  </span>
+                  <span className="weather-meta-sep">·</span>
+                  <span className="weather-commute-item">
+                    PM ({commute?.pm?.label ?? '4–6pm'}):{' '}
+                    <strong>{commute?.pm?.maxPop != null ? `${commute.pm.maxPop}%` : '--'}</strong>
+                  </span>
+                </div>
+                {commute?.radarUrl && (
+                  <a
+                    className="weather-radar-link"
+                    href={commute.radarUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Radar
+                  </a>
+                )}
+              </div>
+            )}
+
             {next24h.length > 0 && (
               <div className="weather-forecast-block">
                 <div className="weather-forecast-label">Next 24 hours</div>
@@ -87,6 +128,13 @@ export default function WeatherCard({ data }) {
                 </div>
               </div>
             )}
+
+            <RadarWidget
+              apiBase={apiBase}
+              defaultLat={defaultLat}
+              defaultLon={defaultLon}
+              expectedPop={commute?.next2h?.maxPop ?? null}
+            />
           </>
         ) : (
           <span className="loading">—</span>

@@ -5,6 +5,7 @@ import GasCard from './components/GasCard';
 import MetricCard from './components/MetricCard';
 import WeatherCard from './components/WeatherCard';
 import GasBuddySearch from './components/GasBuddySearch';
+import ChessMoveCard from './components/ChessMoveCard';
 
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const OIL_SOURCE_URL = 'https://markets.businessinsider.com/commodities/oil-price?op=1';
@@ -83,6 +84,7 @@ function App() {
     wti: null,
     treasury: null,
     weather: null,
+    chess: null,
   });
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
@@ -120,6 +122,11 @@ function App() {
     return { weather };
   }, [base]);
 
+  const fetchChess = useCallback(async () => {
+    const chess = await fetch(`${base}/chess/move-of-day`).then((r) => r.json());
+    return { chess };
+  }, [base]);
+
   const fetchActiveTab = useCallback(
     async (tab, { showLoading = false } = {}) => {
       if (showLoading) setLoading(true);
@@ -137,6 +144,7 @@ function App() {
         else if (tab === 'Oil') partial = await fetchOil();
         else if (tab === 'Treasury') partial = await fetchTreasury();
         else if (tab === 'Weather') partial = await fetchWeather();
+        else if (tab === 'Chess') partial = await fetchChess();
         else partial = {};
 
         setMetrics((prev) => {
@@ -151,7 +159,7 @@ function App() {
         setLoading(false);
       }
     },
-    [fetchGasAll, fetchOil, fetchTreasury, fetchWeather]
+    [fetchGasAll, fetchOil, fetchTreasury, fetchWeather, fetchChess]
   );
 
   const refreshNow = useCallback(() => fetchActiveTab(activeTab, { showLoading: true }), [
@@ -161,14 +169,15 @@ function App() {
 
   const prefetchOtherTabs = useCallback(async () => {
     // Don't block render; best-effort background fill.
-    const tabs = ['Gas', 'Oil', 'Treasury', 'Weather'].filter((t) => t !== activeTab);
+    const tabs = ['Gas', 'Oil', 'Treasury', 'Weather', 'Chess'].filter((t) => t !== activeTab);
     for (const t of tabs) {
       // only fetch if we don't have the main data yet
       const hasData =
         (t === 'Gas' && metrics.gas && metrics.gasNc && metrics.gasSc && metrics.gasCharlotte) ||
         (t === 'Oil' && metrics.brent && metrics.wti) ||
         (t === 'Treasury' && metrics.treasury) ||
-        (t === 'Weather' && metrics.weather);
+        (t === 'Weather' && metrics.weather) ||
+        (t === 'Chess' && metrics.chess);
       if (!hasData) {
         // eslint-disable-next-line no-await-in-loop
         await fetchActiveTab(t, { showLoading: false });
@@ -337,7 +346,12 @@ function App() {
         )}
         {activeTab === 'Weather' && (
           <section className="tab-content">
-            <WeatherCard data={metrics.weather} />
+            <WeatherCard data={metrics.weather} apiBase={base} />
+          </section>
+        )}
+        {activeTab === 'Chess' && (
+          <section className="tab-content">
+            <ChessMoveCard data={metrics.chess} />
           </section>
         )}
       </main>

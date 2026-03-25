@@ -65,6 +65,13 @@ const brentCache = makeCache(15 * 60 * 1000);
 const wtiCache = makeCache(15 * 60 * 1000);
 const treasuryCache = makeCache(15 * 60 * 1000);
 const weatherCache = makeCache(10 * 60 * 1000);
+const chessCache = makeCache(6 * 60 * 60 * 1000);
+const geocodeZipCache = new Map(); // zip -> { at, payload, inflight }
+const GEOCODE_ZIP_CACHE_MS = 24 * 60 * 60 * 1000;
+
+function isValidZip(zip) {
+  return typeof zip === 'string' && /^\d{5}$/.test(zip);
+}
 
 // Brent Crude (EIA)
 app.get('/api/brent', async (req, res) => {
@@ -106,6 +113,81 @@ app.get('/api/treasury', async (req, res) => {
     res.json(data);
   } catch (err) {
     res.json({ error: 'Treasury fetch failed', details: err.message });
+  }
+});
+
+// Chess move of the day (Chess.com daily puzzle)
+app.get('/api/chess/move-of-day', async (req, res) => {
+  try {
+    const payload = await withCache(chessCache, async () => {
+      const data = await proxyFetch('https://api.chess.com/pub/puzzle', 'Chess puzzle fetch failed');
+      if (data?.error) return data;
+      const line = typeof data?.pgn === 'string' ? data.pgn : '';
+      const moveText = line
+        .split(/\r?\n\r?\n/)
+        .slice(-1)[0]
+        .replace(/\[[^\]]+\]/g, '')
+        .trim();
+      const moveTokens = moveText
+        .replace(/\r?\n/g, ' ')
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .filter((t) => !/^\d+\.+$/.test(t) && !/^(1-0|0-1|1\/2-1\/2|\*)$/.test(t));
+      const suggested = moveTokens.length > 0 ? moveTokens[0] : null;
+      return {
+        title: data?.title ?? 'Chess Move of the Day',
+        url: data?.url ?? 'https://www.chess.com/daily-chess-puzzle',
+        image: data?.image ?? null,
+        fen: data?.fen ?? null,
+        pgn: data?.pgn ?? null,
+        suggestedMove: suggested,
+        published: data?.publish_time ?? null,
+      };
+    });
+    res.json(payload);
+  } catch (err) {
+    res.json({ error: 'Chess move fetch failed', details: err.message });
+  }
+});
+
+// Zip -> lat/lon (OpenWeather Geocoding)
+app.get('/api/geocode/zip/:zip', async (req, res) => {
+  try {
+    const zip = String(req.params.zip || '').trim();
+    if (!isValidZip(zip)) return res.json({ error: 'Invalid zip code' });
+    const key = process.env.OPENWEATHER_API_KEY?.trim();
+    if (!key) return res.json({ error: 'OPENWEATHER_API_KEY not set' });
+
+    const cached = geocodeZipCache.get(zip);
+    const now = Date.now();
+    if (cached?.payload && now - cached.at < GEOCODE_ZIP_CACHE_MS) return res.json(cached.payload);
+
+    if (!cached?.inflight) {
+      const inflight = (async () => {
+        const url = `https://api.openweathermap.org/geo/1.0/zip?zip=${encodeURIComponent(
+          zip
+        )},US&appid=${encodeURIComponent(key)}`;
+        const payload = await proxyFetch(url, 'Zip geocode failed');
+        geocodeZipCache.set(zip, { at: Date.now(), payload, inflight: null });
+        return payload;
+      })().finally(() => {
+        const next = geocodeZipCache.get(zip);
+        if (next?.inflight) geocodeZipCache.set(zip, { ...next, inflight: null });
+      });
+      geocodeZipCache.set(zip, { at: now, payload: null, inflight });
+    }
+
+    const payload = await geocodeZipCache.get(zip).inflight;
+
+    if (payload?.error) return res.json(payload);
+    if (payload?.cod === '404' || payload?.cod === 404) return res.json({ error: 'Zip not found' });
+    const lat = Number(payload?.lat);
+    const lon = Number(payload?.lon);
+    if (Number.isNaN(lat) || Number.isNaN(lon)) return res.json({ error: 'Zip not found' });
+    res.json({ zip, lat, lon, name: payload?.name ?? null });
+  } catch (err) {
+    res.json({ error: 'Zip geocode failed', details: err.message });
   }
 });
 
@@ -304,6 +386,7 @@ app.get('/api/news/international', async (req, res) => {
 
 const CHARLOTTE_QUERY = 'Charlotte,US';
 const CHARLOTTE_TZ = 'America/New_York';
+const CHARLOTTE_COORDS = { lat: 35.2271, lon: -80.8431 };
 
 function dateKeyInTimeZone(tsSec, timeZone) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -321,6 +404,17 @@ function todayKeyInTimeZone(timeZone) {
     month: '2-digit',
     day: '2-digit',
   }).format(new Date());
+}
+
+function toLocalHourInTimeZone(tsSec, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(tsSec * 1000));
+  const h = parts.find((p) => p.type === 'hour')?.value;
+  const n = Number(h);
+  return Number.isNaN(n) ? null : n;
 }
 
 // Weather - Charlotte, NC (current + 3h forecast for today’s range & next 24h)
@@ -382,10 +476,94 @@ app.get('/api/weather', async (req, res) => {
         pop: item.pop != null ? Math.round(item.pop * 100) : null,
       }));
 
+      // Commute + next-2-hours precip summary (Open-Meteo; no key)
+      let commute = null;
+      try {
+        const lat = Number(current?.coord?.lat ?? CHARLOTTE_COORDS.lat);
+        const lon = Number(current?.coord?.lon ?? CHARLOTTE_COORDS.lon);
+        if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+          const omUrl =
+            `https://api.open-meteo.com/v1/forecast` +
+            `?latitude=${encodeURIComponent(lat)}` +
+            `&longitude=${encodeURIComponent(lon)}` +
+            `&hourly=precipitation_probability,precipitation` +
+            `&timezone=${encodeURIComponent(CHARLOTTE_TZ)}` +
+            `&forecast_days=2`;
+          const om = await proxyFetch(omUrl, 'Open-Meteo fetch failed');
+          const times = Array.isArray(om?.hourly?.time) ? om.hourly.time : [];
+          const pop = Array.isArray(om?.hourly?.precipitation_probability)
+            ? om.hourly.precipitation_probability
+            : [];
+          const precip = Array.isArray(om?.hourly?.precipitation) ? om.hourly.precipitation : [];
+
+          const nowMs = Date.now();
+          const points = times
+            .map((t, idx) => {
+              const ms = Date.parse(t);
+              if (Number.isNaN(ms)) return null;
+              return {
+                ms,
+                pop: pop[idx] != null ? Number(pop[idx]) : null,
+                precip: precip[idx] != null ? Number(precip[idx]) : null,
+              };
+            })
+            .filter(Boolean)
+            .filter((p) => p.ms >= nowMs - 60 * 60 * 1000); // include current hour if slightly behind
+
+          function maxPopBetween(startHour, endHour) {
+            const todayKey = todayKeyInTimeZone(CHARLOTTE_TZ);
+            const vals = points
+              .map((p) => {
+                const tsSec = Math.floor(p.ms / 1000);
+                const dayKey = dateKeyInTimeZone(tsSec, CHARLOTTE_TZ);
+                const hr = toLocalHourInTimeZone(tsSec, CHARLOTTE_TZ);
+                if (dayKey !== todayKey) return null;
+                if (hr == null) return null;
+                if (hr < startHour || hr >= endHour) return null;
+                if (p.pop == null || Number.isNaN(p.pop)) return null;
+                return p.pop;
+              })
+              .filter((v) => v != null);
+            if (!vals.length) return null;
+            return Math.round(Math.max(...vals));
+          }
+
+          const next2h = points
+            .filter((p) => p.ms <= nowMs + 2 * 60 * 60 * 1000)
+            .slice(0, 3);
+          const next2hMaxPop = next2h.length
+            ? Math.round(
+                Math.max(
+                  ...next2h
+                    .map((p) => (p.pop == null || Number.isNaN(p.pop) ? null : p.pop))
+                    .filter((v) => v != null)
+                )
+              )
+            : null;
+          const next2hPrecipMm = next2h.reduce((sum, p) => {
+            const v = p.precip;
+            return sum + (v == null || Number.isNaN(v) ? 0 : v);
+          }, 0);
+
+          commute = {
+            next2h: {
+              maxPop: Number.isFinite(next2hMaxPop) ? next2hMaxPop : null,
+              precipIn: Number.isFinite(next2hPrecipMm) ? Number((next2hPrecipMm / 25.4).toFixed(2)) : null,
+            },
+            am: { label: '7–9am', maxPop: maxPopBetween(7, 9) },
+            pm: { label: '4–6pm', maxPop: maxPopBetween(16, 18) },
+            radarUrl: 'https://www.weather.com/weather/radar/interactive/l/Charlotte+NC',
+          };
+        }
+      } catch {
+        commute = null;
+      }
+
       return {
         current,
         todayRange,
         next24h,
+        commute,
         timeZone: CHARLOTTE_TZ,
       };
     });
