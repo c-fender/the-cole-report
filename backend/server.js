@@ -11,6 +11,28 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+function makeCache(ttlMs) {
+  return { ttlMs, at: 0, value: null, inflight: null };
+}
+
+async function withCache(cache, buildFn) {
+  const now = Date.now();
+  if (cache.value && now - cache.at < cache.ttlMs) return cache.value;
+  if (!cache.inflight) {
+    cache.inflight = Promise.resolve()
+      .then(buildFn)
+      .then((val) => {
+        cache.value = val;
+        cache.at = Date.now();
+        return val;
+      })
+      .finally(() => {
+        cache.inflight = null;
+      });
+  }
+  return cache.inflight;
+}
+
 // Helper: fetch with timeout and error handling
 async function proxyFetch(url, errorMsg = 'Failed to fetch data') {
   try {
@@ -39,29 +61,52 @@ async function fetchEiaSeries(seriesId, key, label) {
   };
 }
 
+const brentCache = makeCache(15 * 60 * 1000);
+const wtiCache = makeCache(15 * 60 * 1000);
+const treasuryCache = makeCache(15 * 60 * 1000);
+const weatherCache = makeCache(10 * 60 * 1000);
+
 // Brent Crude (EIA)
 app.get('/api/brent', async (req, res) => {
-  const key = process.env.EIA_API_KEY;
-  if (!key) return res.json({ error: 'EIA_API_KEY not set' });
-  const normalized = await fetchEiaSeries('PET.RBRTE.D', key, 'Brent Crude Oil Spot Price');
-  res.json(normalized);
+  try {
+    const key = process.env.EIA_API_KEY;
+    if (!key) return res.json({ error: 'EIA_API_KEY not set' });
+    const normalized = await withCache(brentCache, () =>
+      fetchEiaSeries('PET.RBRTE.D', key, 'Brent Crude Oil Spot Price')
+    );
+    res.json(normalized);
+  } catch (err) {
+    res.json({ error: 'Brent fetch failed', details: err.message });
+  }
 });
 
 // WTI Crude (EIA)
 app.get('/api/wti', async (req, res) => {
-  const key = process.env.EIA_API_KEY;
-  if (!key) return res.json({ error: 'EIA_API_KEY not set' });
-  const normalized = await fetchEiaSeries('PET.RWTC.D', key, 'WTI Crude Oil Spot Price');
-  res.json(normalized);
+  try {
+    const key = process.env.EIA_API_KEY;
+    if (!key) return res.json({ error: 'EIA_API_KEY not set' });
+    const normalized = await withCache(wtiCache, () =>
+      fetchEiaSeries('PET.RWTC.D', key, 'WTI Crude Oil Spot Price')
+    );
+    res.json(normalized);
+  } catch (err) {
+    res.json({ error: 'WTI fetch failed', details: err.message });
+  }
 });
 
 // US 10Y Treasury (Alpha Vantage FRED)
 app.get('/api/treasury', async (req, res) => {
-  const key = process.env.ALPHA_VANTAGE_API_KEY;
-  if (!key) return res.json({ error: 'ALPHA_VANTAGE_API_KEY not set' });
-  const url = `https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=10year&apikey=${key}`;
-  const data = await proxyFetch(url, 'Treasury fetch failed');
-  res.json(data);
+  try {
+    const key = process.env.ALPHA_VANTAGE_API_KEY;
+    if (!key) return res.json({ error: 'ALPHA_VANTAGE_API_KEY not set' });
+    const data = await withCache(treasuryCache, async () => {
+      const url = `https://www.alphavantage.co/query?function=TREASURY_YIELD&interval=daily&maturity=10year&apikey=${key}`;
+      return proxyFetch(url, 'Treasury fetch failed');
+    });
+    res.json(data);
+  } catch (err) {
+    res.json({ error: 'Treasury fetch failed', details: err.message });
+  }
 });
 
 const AAA_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
@@ -76,6 +121,7 @@ async function fetchAaaHtml(url) {
   if (!resFetch.ok) throw new Error(`AAA HTTP ${resFetch.status}`);
   return resFetch.text();
 }
+
 
 function parseGasTableFromHtml(html) {
   const $ = cheerio.load(html);
@@ -279,65 +325,75 @@ function todayKeyInTimeZone(timeZone) {
 
 // Weather - Charlotte, NC (current + 3h forecast for today’s range & next 24h)
 app.get('/api/weather', async (req, res) => {
-  const key = process.env.OPENWEATHER_API_KEY?.trim();
-  if (!key) return res.json({ error: 'OPENWEATHER_API_KEY not set' });
-  const base = 'https://api.openweathermap.org/data/2.5';
-  const q = encodeURIComponent(CHARLOTTE_QUERY);
-  const current = await proxyFetch(
-    `${base}/weather?q=${q}&units=imperial&appid=${key}`,
-    'Weather current failed'
-  );
-  if (current?.error) return res.json(current);
-  if (current?.cod === 401 || current?.cod === 403) {
-    return res.json({
-      error:
-        current?.message ||
-        'OpenWeather rejected the API key (check key and activation at openweathermap.org).',
-    });
-  }
+  try {
+    const key = process.env.OPENWEATHER_API_KEY?.trim();
+    if (!key) return res.json({ error: 'OPENWEATHER_API_KEY not set' });
 
-  const forecastRes = await proxyFetch(
-    `${base}/forecast?q=${q}&units=imperial&appid=${key}`,
-    'Weather forecast failed'
-  );
-  const list =
-    forecastRes?.error || !Array.isArray(forecastRes?.list) ? [] : forecastRes.list;
+    const payload = await withCache(weatherCache, async () => {
+      const base = 'https://api.openweathermap.org/data/2.5';
+      const q = encodeURIComponent(CHARLOTTE_QUERY);
 
-  const tKey = todayKeyInTimeZone(CHARLOTTE_TZ);
-  const todaySlots = list.filter((item) => dateKeyInTimeZone(item.dt, CHARLOTTE_TZ) === tKey);
+      const current = await proxyFetch(
+        `${base}/weather?q=${q}&units=imperial&appid=${key}`,
+        'Weather current failed'
+      );
+      if (current?.error) return current;
+      if (current?.cod === 401 || current?.cod === 403) {
+        return {
+          error:
+            current?.message ||
+            'OpenWeather rejected the API key (check key and activation at openweathermap.org).',
+        };
+      }
 
-  const tempsHigh = [];
-  const tempsLow = [];
-  if (typeof current?.main?.temp_max === 'number') tempsHigh.push(current.main.temp_max);
-  if (typeof current?.main?.temp_min === 'number') tempsLow.push(current.main.temp_min);
-  for (const i of todaySlots) {
-    if (typeof i.main?.temp === 'number') {
-      tempsHigh.push(i.main.temp);
-      tempsLow.push(i.main.temp);
-    }
-  }
-  const todayRange =
-    tempsHigh.length && tempsLow.length
-      ? {
-          high: Math.round(Math.max(...tempsHigh)),
-          low: Math.round(Math.min(...tempsLow)),
+      const forecastRes = await proxyFetch(
+        `${base}/forecast?q=${q}&units=imperial&appid=${key}`,
+        'Weather forecast failed'
+      );
+      const list =
+        forecastRes?.error || !Array.isArray(forecastRes?.list) ? [] : forecastRes.list;
+
+      const tKey = todayKeyInTimeZone(CHARLOTTE_TZ);
+      const todaySlots = list.filter((item) => dateKeyInTimeZone(item.dt, CHARLOTTE_TZ) === tKey);
+
+      const tempsHigh = [];
+      const tempsLow = [];
+      if (typeof current?.main?.temp_max === 'number') tempsHigh.push(current.main.temp_max);
+      if (typeof current?.main?.temp_min === 'number') tempsLow.push(current.main.temp_min);
+      for (const i of todaySlots) {
+        if (typeof i.main?.temp === 'number') {
+          tempsHigh.push(i.main.temp);
+          tempsLow.push(i.main.temp);
         }
-      : null;
+      }
+      const todayRange =
+        tempsHigh.length && tempsLow.length
+          ? {
+              high: Math.round(Math.max(...tempsHigh)),
+              low: Math.round(Math.min(...tempsLow)),
+            }
+          : null;
 
-  const next24h = list.slice(0, 8).map((item) => ({
-    dt: item.dt,
-    temp: typeof item.main?.temp === 'number' ? Math.round(item.main.temp) : null,
-    icon: item.weather?.[0]?.icon,
-    description: item.weather?.[0]?.description,
-    pop: item.pop != null ? Math.round(item.pop * 100) : null,
-  }));
+      const next24h = list.slice(0, 8).map((item) => ({
+        dt: item.dt,
+        temp: typeof item.main?.temp === 'number' ? Math.round(item.main.temp) : null,
+        icon: item.weather?.[0]?.icon,
+        description: item.weather?.[0]?.description,
+        pop: item.pop != null ? Math.round(item.pop * 100) : null,
+      }));
 
-  res.json({
-    current,
-    todayRange,
-    next24h,
-    timeZone: CHARLOTTE_TZ,
-  });
+      return {
+        current,
+        todayRange,
+        next24h,
+        timeZone: CHARLOTTE_TZ,
+      };
+    });
+
+    res.json(payload);
+  } catch (err) {
+    res.json({ error: 'Weather fetch failed', details: err.message });
+  }
 });
 
 app.listen(PORT, () => {
