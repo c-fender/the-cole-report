@@ -25,6 +25,21 @@
   outline-offset: -2px;
 }
 
+.stock-ticker--error {
+  min-height: 2rem;
+  display: flex;
+  align-items: center;
+  padding: 0.45rem 1rem;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.stock-ticker-error-msg {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
 .stock-ticker--skeleton {
   min-height: 2rem;
   background: linear-gradient(

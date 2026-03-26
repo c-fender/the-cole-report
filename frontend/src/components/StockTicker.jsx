@@ -64,7 +64,13 @@ export default function StockTicker({ apiBase, onNavigateToStocks }) {
 
   const items = data?.items;
   if (!items?.length) {
-    if (data?.error) return null;
+    if (data?.error) {
+      return (
+        <div className="stock-ticker stock-ticker--error" role="status" aria-live="polite">
+          <span className="stock-ticker-error-msg">Stock quotes unavailable — check API or try refresh</span>
+        </div>
+      );
+    }
     return <div className="stock-ticker stock-ticker--skeleton" aria-hidden />;
   }
 

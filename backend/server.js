@@ -3,6 +3,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import cheerio from 'cheerio';
 import { Chess } from 'chess.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
@@ -466,6 +469,7 @@ const TICKER_SYMBOLS = [
   ['AVGO', 'Broadcom'],
   ['LLY', 'Eli Lilly'],
   ['COST', 'Costco'],
+  ['FITB', 'Fifth Third'],
   ['MA', 'Mastercard'],
   ['HD', 'Home Depot'],
 ];
@@ -529,6 +533,561 @@ app.get('/api/ticker', async (req, res) => {
     console.error('[api/ticker]', err);
     res.status(200).json({
       error: 'Ticker bundle failed',
+      details: String(err?.message || err),
+    });
+  }
+});
+
+/** TheSportsDB v1 — https://www.thesportsdb.com/api.php (free key `123` or set THESPORTSDB_API_KEY). */
+const THESPORTSDB_BASE = 'https://www.thesportsdb.com/api/v1/json';
+
+const SPORTS_LEAGUES = [
+  { key: 'nba', id: '4387', name: 'NBA' },
+  { key: 'nfl', id: '4391', name: 'NFL' },
+  { key: 'mlb', id: '4424', name: 'MLB' },
+  { key: 'nhl', id: '4380', name: 'NHL' },
+  { key: 'epl', id: '4328', name: 'Premier League' },
+];
+
+function easternDateString() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+function easternTimeHhMmSsFromIso(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const hh = parts.find((p) => p.type === 'hour')?.value;
+  const mm = parts.find((p) => p.type === 'minute')?.value;
+  const ss = parts.find((p) => p.type === 'second')?.value;
+  if (!hh || !mm || !ss) return null;
+  return `${hh}:${mm}:${ss}`;
+}
+
+async function sportsDbFetch(apiKey, pathQuery) {
+  const url = `${THESPORTSDB_BASE}/${apiKey}/${pathQuery}`;
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(20000),
+    headers: { 'User-Agent': YAHOO_UA },
+  });
+  if (!res.ok) throw new Error(`TheSportsDB HTTP ${res.status}`);
+  return res.json();
+}
+
+function normalizeSportsEvent(e, leagueFallback = null) {
+  if (!e || typeof e !== 'object') return null;
+  const fromApi = e.strLeague && String(e.strLeague).trim();
+  const league = fromApi || (leagueFallback && String(leagueFallback).trim()) || null;
+  const timestamp = e.strTimestamp || null;
+  const derivedTimeLocal = easternTimeHhMmSsFromIso(timestamp);
+  return {
+    id: e.idEvent,
+    event: e.strEvent,
+    home: e.strHomeTeam,
+    away: e.strAwayTeam,
+    homeScore: e.intHomeScore,
+    awayScore: e.intAwayScore,
+    homeBadge: e.strHomeTeamBadge || e.strHomeBadge || null,
+    awayBadge: e.strAwayTeamBadge || e.strAwayBadge || null,
+    date: e.dateEvent,
+    /** Local calendar date at the venue (when present); use with finished games for “concluded on” display. */
+    dateLocal: e.dateEventLocal || null,
+    // Prefer TheSportsDB's venue-local time when available (e.g. basketball often differs in meaning from strTime).
+    timeLocal: derivedTimeLocal || e.strTimeLocal || e.strTime,
+    /** ISO-like UTC start time from API (used client-side for upcoming vs latest). */
+    timestamp,
+    league,
+    season: e.strSeason,
+    status: e.strStatus,
+    venue: e.strVenue,
+  };
+}
+
+function firstEventFromLeagueSchedule(j) {
+  if (!j) return null;
+  const ev = j.events;
+  if (Array.isArray(ev) && ev.length) return ev[0];
+  if (ev && typeof ev === 'object') return ev;
+  return null;
+}
+
+function eventsFromDayJson(j) {
+  if (!j) return [];
+  const raw = j.events;
+  return Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? [raw] : [];
+}
+
+function espnDateLabelToYmd(dateLabel) {
+  // The ESPN scoreboard `dates` parameter expects YYYYMMDD.
+  const s = String(dateLabel || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.replaceAll('-', '');
+  return s.replaceAll('-', '');
+}
+
+function espnEventStartTimeLocal(startIso) {
+  // Convert ISO timestamp to Eastern HH:MM:00.
+  const d = new Date(startIso);
+  if (!Number.isFinite(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const hh = parts.find((p) => p.type === 'hour')?.value;
+  const mm = parts.find((p) => p.type === 'minute')?.value;
+  if (!hh || !mm) return null;
+  return `${hh}:${mm}:00`;
+}
+
+function normalizeEspnNbaEvent(espnEvent, dateLabel) {
+  const comp = espnEvent?.competitions?.[0];
+  if (!comp) return null;
+
+  const competitors = Array.isArray(comp.competitors) ? comp.competitors : [];
+  const homeComp = competitors.find((c) => c?.homeAway === 'home') || competitors[0];
+  const awayComp = competitors.find((c) => c?.homeAway === 'away') || competitors[1] || competitors[0];
+
+  const home = homeComp?.team?.displayName || null;
+  const away = awayComp?.team?.displayName || null;
+  if (!home || !away) return null;
+
+  const statusType = comp?.status?.type || {};
+  const completed = statusType?.completed === true;
+  const state = String(statusType?.state || '').toLowerCase();
+  const statusName = String(statusType?.name || '');
+
+  let status = 'Scheduled';
+  let homeScore = null;
+  let awayScore = null;
+
+  if (completed) {
+    status = 'Final';
+    homeScore = homeComp?.score ?? null;
+    awayScore = awayComp?.score ?? null;
+  } else if (state.includes('in')) {
+    status = 'In Progress';
+    homeScore = homeComp?.score ?? null;
+    awayScore = awayComp?.score ?? null;
+  } else if (/SCHEDULED/i.test(statusName) || state.includes('pre')) {
+    status = 'Scheduled';
+  } else if (/POST/i.test(statusName) || state.includes('post')) {
+    status = 'Final';
+    homeScore = homeComp?.score ?? null;
+    awayScore = awayComp?.score ?? null;
+  }
+
+  // ESPN returns `date` in an ISO string (typically UTC). We also store an Eastern-local-ish display string for the UI.
+  const startIso = comp?.date;
+  const timestamp = startIso ? String(startIso) : null;
+
+  const timeLocal = startIso ? espnEventStartTimeLocal(startIso) : null;
+
+  // For this UI, `dateLocal` is used to display "Ended <date>" for finished games. ESPN doesn't provide an end timestamp,
+  // so we treat the scoreboard date as the concluded calendar date.
+  const date = dateLabel;
+  const dateLocal = dateLabel;
+
+  const venue = comp?.venue?.name || null;
+
+  return {
+    id: espnEvent?.id ?? `${dateLabel}:${home}:${away}`,
+    event: `${away} vs ${home}`,
+    home,
+    away,
+    homeScore,
+    awayScore,
+    homeBadge: null,
+    awayBadge: null,
+    date,
+    dateLocal,
+    timeLocal,
+    timestamp,
+    league: 'NBA',
+    season: null,
+    status,
+    venue,
+  };
+}
+
+const __serverDir = path.dirname(fileURLToPath(import.meta.url));
+const TEAM_BADGE_CACHE_VERSION = 2;
+const TEAM_BADGE_CACHE_FILE = path.join(__serverDir, '.team-badge-cache.json');
+
+/** @type {Map<string, string>} */
+const nbaTeamBadgeCache = new Map();
+const nbaTeamBadgeInflight = new Map();
+
+try {
+  if (fs.existsSync(TEAM_BADGE_CACHE_FILE)) {
+    const raw = fs.readFileSync(TEAM_BADGE_CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed?.version === TEAM_BADGE_CACHE_VERSION && parsed?.byKey && typeof parsed.byKey === 'object') {
+      for (const [k, v] of Object.entries(parsed.byKey)) {
+        if (typeof v === 'string' && v.trim()) nbaTeamBadgeCache.set(k, v);
+      }
+    }
+  }
+} catch (e) {
+  console.warn('[sports] team badge cache load failed:', String(e?.message || e));
+}
+
+function persistTeamBadgeCache() {
+  try {
+    const byKey = Object.fromEntries(nbaTeamBadgeCache.entries());
+    fs.writeFileSync(TEAM_BADGE_CACHE_FILE, JSON.stringify({ version: TEAM_BADGE_CACHE_VERSION, byKey }, null, 2));
+  } catch (e) {
+    console.warn('[sports] team badge cache write failed:', String(e?.message || e));
+  }
+}
+
+async function fetchTeamBadgeFromTheSportsDb(apiKey, teamName) {
+  const k = String(teamName || '').trim().toLowerCase();
+  if (!k) return null;
+  if (nbaTeamBadgeCache.has(k)) return nbaTeamBadgeCache.get(k) || null;
+  if (nbaTeamBadgeInflight.has(k)) return nbaTeamBadgeInflight.get(k);
+
+  const p = (async () => {
+    const res = await sportsDbFetch(apiKey, `searchteams.php?t=${encodeURIComponent(teamName)}`).catch((err) => {
+      console.warn('[sports] team logo fetch failed:', teamName, err?.message || err);
+      return null;
+    });
+    const teams = Array.isArray(res?.teams) ? res.teams : [];
+    const badge = teams[0]?.strBadge || teams[0]?.strLogo || null;
+    if (badge) {
+      nbaTeamBadgeCache.set(k, badge);
+      persistTeamBadgeCache();
+    }
+    return badge;
+  })();
+
+  nbaTeamBadgeInflight.set(k, p);
+  try {
+    return await p;
+  } finally {
+    nbaTeamBadgeInflight.delete(k);
+  }
+}
+
+async function fetchEspnNbaEventsForDate(apiKey, dateLabel) {
+  const ymd = espnDateLabelToYmd(dateLabel);
+  const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${encodeURIComponent(ymd)}`;
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(20000),
+    headers: { 'User-Agent': YAHOO_UA },
+  });
+  if (!res.ok) throw new Error(`ESPN HTTP ${res.status}`);
+  const j = await res.json();
+  const events = Array.isArray(j?.events) ? j.events : [];
+  const normalized = events.map((ev) => normalizeEspnNbaEvent(ev, dateLabel)).filter(Boolean);
+  // Attach TheSportsDB team badges so the UI stays consistent.
+  return Promise.all(
+    normalized.map(async (e) => {
+      const [homeBadge, awayBadge] = await Promise.all([
+        fetchTeamBadgeFromTheSportsDb(apiKey, e.home),
+        fetchTeamBadgeFromTheSportsDb(apiKey, e.away),
+      ]);
+      return { ...e, homeBadge, awayBadge };
+    })
+  );
+}
+
+function normalizeEspnMlbEvent(espnEvent, dateLabel) {
+  const comp = espnEvent?.competitions?.[0];
+  if (!comp) return null;
+
+  const competitors = Array.isArray(comp.competitors) ? comp.competitors : [];
+  const homeComp = competitors.find((c) => c?.homeAway === 'home') || competitors[0];
+  const awayComp =
+    competitors.find((c) => c?.homeAway === 'away') || competitors[1] || competitors[0] || null;
+
+  const home = homeComp?.team?.displayName || null;
+  const away = awayComp?.team?.displayName || null;
+  if (!home || !away) return null;
+
+  const statusType = comp?.status?.type || {};
+  const completed = statusType?.completed === true;
+  const state = String(statusType?.state || '').toLowerCase();
+
+  let status = 'Scheduled';
+  let homeScore = null;
+  let awayScore = null;
+
+  if (completed) {
+    status = 'Final';
+    homeScore = homeComp?.score ?? null;
+    awayScore = awayComp?.score ?? null;
+  } else if (state.includes('in')) {
+    status = 'In Progress';
+    homeScore = homeComp?.score ?? null;
+    awayScore = awayComp?.score ?? null;
+  } else {
+    status = 'Scheduled';
+  }
+
+  const startIso = comp?.date;
+  const timestamp = startIso ? String(startIso) : null;
+  const timeLocal = startIso ? espnEventStartTimeLocal(startIso) : null;
+
+  return {
+    id: espnEvent?.id ?? `${dateLabel}:${home}:${away}`,
+    event: `${away} vs ${home}`,
+    home,
+    away,
+    homeScore,
+    awayScore,
+    homeBadge: null,
+    awayBadge: null,
+    date: dateLabel,
+    dateLocal: dateLabel,
+    timeLocal,
+    timestamp,
+    league: 'MLB',
+    season: null,
+    status,
+    venue: comp?.venue?.name || null,
+  };
+}
+
+async function fetchEspnMlbEventsForDate(apiKey, dateLabel) {
+  const ymd = espnDateLabelToYmd(dateLabel);
+  const url = `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${encodeURIComponent(ymd)}`;
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(20000),
+    headers: { 'User-Agent': YAHOO_UA },
+  });
+  if (!res.ok) throw new Error(`ESPN MLB HTTP ${res.status}`);
+  const j = await res.json();
+  const events = Array.isArray(j?.events) ? j.events : [];
+
+  const normalized = events.map((ev) => normalizeEspnMlbEvent(ev, dateLabel)).filter(Boolean);
+  return Promise.all(
+    normalized.map(async (e) => {
+      const [homeBadge, awayBadge] = await Promise.all([
+        fetchTeamBadgeFromTheSportsDb(apiKey, e.home),
+        fetchTeamBadgeFromTheSportsDb(apiKey, e.away),
+      ]);
+      return { ...e, homeBadge, awayBadge };
+    })
+  );
+}
+
+function eventDedupeKey(e) {
+  const id = e?.idEvent;
+  if (id != null && id !== '') return `id:${id}`;
+  return `f:${e?.strEvent}|${e?.dateEvent}|${e?.strHomeTeam}|${e?.strAwayTeam}`;
+}
+
+function crossTeamDedupeKey(e) {
+  const league = e?.league || '';
+  const date = e?.date || '';
+  const h = e?.home || '';
+  const a = e?.away || '';
+  if (!league || !date || !h || !a) return null;
+  const pair = [h, a].sort((x, y) => String(x).localeCompare(String(y)));
+  return `f:${league}|${date}|${pair[0]}|${pair[1]}`;
+}
+
+/**
+ * Global eventsday + per-league eventsday. League-scoped responses often omit `strLeague`; we pass the known
+ * league name so UI grouping (NBA vs Other) matches. Later rows enrich earlier duplicates with league when missing.
+ */
+function mergeTodayEventsFromFeeds(globalJson, leagueDayPairs) {
+  /** @type {Map<string, ReturnType<typeof normalizeSportsEvent>>} */
+  const items = new Map();
+
+  function addRaw(e, leagueFallback) {
+    const n = normalizeSportsEvent(e, leagueFallback);
+    if (!n) return;
+    const k = eventDedupeKey(e);
+    const prev = items.get(k);
+    if (!prev) {
+      items.set(k, n);
+      return;
+    }
+    if ((!prev.league || !String(prev.league).trim()) && n.league) {
+      items.set(k, { ...prev, league: n.league });
+    }
+  }
+
+  for (const e of eventsFromDayJson(globalJson)) {
+    addRaw(e, null);
+  }
+  for (const { L, json } of leagueDayPairs) {
+    if (!json) continue;
+    for (const e of eventsFromDayJson(json)) {
+      addRaw(e, L.name);
+    }
+  }
+
+  return [...items.values()];
+}
+
+async function fetchEventsDayForLeague(apiKey, dateLabel, L) {
+  const d = encodeURIComponent(dateLabel);
+  // TheSportsDB often returns events:null for eventsday.php?l={numeric id} (e.g. NBA 4387) but works with l=NBA.
+  const byName = await sportsDbFetch(apiKey, `eventsday.php?d=${d}&l=${encodeURIComponent(L.name)}`).catch((err) => {
+    console.warn(`[sports] eventsday league ${L.key} (name):`, err?.message || err);
+    return null;
+  });
+  if (eventsFromDayJson(byName).length > 0) return byName;
+  const byId = await sportsDbFetch(apiKey, `eventsday.php?d=${d}&l=${L.id}`).catch((err) => {
+    console.warn(`[sports] eventsday league ${L.key} (id):`, err?.message || err);
+    return null;
+  });
+  return eventsFromDayJson(byId).length > 0 ? byId : byName;
+}
+
+async function buildSportsBundle() {
+  const apiKey = process.env.THESPORTSDB_API_KEY || '123';
+  const fetchedAt = new Date().toISOString();
+  const dateLabel = easternDateString();
+
+  try {
+    let globalDay = null;
+    try {
+      globalDay = await sportsDbFetch(apiKey, `eventsday.php?d=${encodeURIComponent(dateLabel)}`);
+    } catch (err) {
+      // TheSportsDB rate-limits (429) sometimes; don't fail the whole bundle.
+      const msg = String(err?.message || err || '');
+      if (msg.includes('429')) {
+        console.warn('[sports] TheSportsDB global eventsday rate-limited; returning partial bundle');
+      } else {
+        throw err;
+      }
+    }
+
+    const leagueDayPairs = await Promise.all(
+      SPORTS_LEAGUES.map(async (L) => ({
+        L,
+        json: await fetchEventsDayForLeague(apiKey, dateLabel, L),
+      }))
+    );
+
+    const leaguePayloads = await Promise.all(
+      SPORTS_LEAGUES.map((L) =>
+        sportsDbFetch(apiKey, `eventsnextleague.php?id=${L.id}`)
+          .then((j) => ({ league: L, j }))
+          .catch((err) => ({ league: L, error: String(err?.message || err) }))
+      )
+    );
+
+    const todayEventsFromSportsdb = mergeTodayEventsFromFeeds(globalDay, leagueDayPairs);
+
+    // Cross-reference NBA with ESPN scoreboard because TheSportsDB sometimes misses specific matchups for the day.
+    const espnNbaEvents = await fetchEspnNbaEventsForDate(apiKey, dateLabel).catch((err) => {
+      console.warn('[sports] ESPN NBA fetch failed:', err?.message || err);
+      return [];
+    });
+
+    /** @type {Map<string, ReturnType<typeof normalizeSportsEvent>>} */
+    const deduped = new Map();
+
+    for (const e of todayEventsFromSportsdb) {
+      const k = crossTeamDedupeKey(e);
+      if (!deduped.has(k)) deduped.set(k, e);
+    }
+    // Prefer ESPN fields (start time/status/scores) when both sources have the same game.
+    // Keep any existing badges from TheSportsDB/cached logos when ESPN doesn't have one.
+    for (const e of espnNbaEvents) {
+      const k = crossTeamDedupeKey(e);
+      const prev = deduped.get(k);
+      if (!prev) {
+        deduped.set(k, e);
+        continue;
+      }
+      deduped.set(k, {
+        ...prev,
+        ...e,
+        homeBadge: e.homeBadge || prev.homeBadge,
+        awayBadge: e.awayBadge || prev.awayBadge,
+      });
+    }
+
+    // Cross-reference MLB with ESPN so live baseball scores are present.
+    const espnMlbEvents = await fetchEspnMlbEventsForDate(apiKey, dateLabel).catch((err) => {
+      console.warn('[sports] ESPN MLB fetch failed:', err?.message || err);
+      return [];
+    });
+
+    for (const e of espnMlbEvents) {
+      const k = crossTeamDedupeKey(e);
+      const prev = deduped.get(k);
+      if (!prev) {
+        deduped.set(k, e);
+        continue;
+      }
+      deduped.set(k, {
+        ...prev,
+        ...e,
+        homeBadge: e.homeBadge || prev.homeBadge,
+        awayBadge: e.awayBadge || prev.awayBadge,
+      });
+    }
+
+    const todayEvents = [...deduped.values()].sort((a, b) => {
+      const byLeague = String(a.league || '').localeCompare(String(b.league || ''));
+      if (byLeague !== 0) return byLeague;
+      return String(a.timeLocal || '').localeCompare(String(b.timeLocal || ''));
+    });
+
+    const upcomingByLeague = leaguePayloads.map((row) => {
+      if (row.error) {
+        return { key: row.league.key, name: row.league.name, error: row.error };
+      }
+      const raw = firstEventFromLeagueSchedule(row.j);
+      return {
+        key: row.league.key,
+        name: row.league.name,
+        nextEvent: normalizeSportsEvent(raw, row.league.name),
+      };
+    });
+
+    return {
+      fetchedAt,
+      dateLabel,
+      source: 'thesportsdb+espn-nba+espn-mlb',
+      todayEvents,
+      upcomingByLeague,
+    };
+  } catch (e) {
+    console.error('[buildSportsBundle]', e);
+    return {
+      error: 'Sports bundle failed',
+      details: String(e?.message || e),
+    };
+  }
+}
+
+// Live scores change quickly; keep this bundle relatively fresh.
+const sportsCache = makeCache(2 * 60 * 1000);
+
+app.get('/api/sports', async (req, res) => {
+  try {
+    const refresh =
+      req.query?.refresh === '1' || req.query?.refresh === 'true' || req.query?.refresh === 'yes';
+    if (refresh) {
+      sportsCache.value = null;
+      sportsCache.at = 0;
+    }
+    const payload = await withMarketsCache(sportsCache, () => buildSportsBundle());
+    res.status(200).json(payload);
+  } catch (err) {
+    console.error('[api/sports]', err);
+    res.status(200).json({
+      error: 'Sports bundle failed',
       details: String(err?.message || err),
     });
   }
@@ -1118,6 +1677,6 @@ app.get('/api/weather', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Cole Report API proxy running on http://localhost:${PORT}`);
   console.log(
-    'Routes include GET /api/health, GET /api/rates, GET /api/markets, GET /api/ticker — restart after git pull if routes 404.'
+    'Routes include GET /api/health, GET /api/rates, GET /api/markets, GET /api/ticker, GET /api/sports — restart after git pull if routes 404.'
   );
 });

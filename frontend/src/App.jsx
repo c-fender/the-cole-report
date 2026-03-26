@@ -7,6 +7,7 @@ import WeatherCard from './components/WeatherCard';
 import GasBuddySearch from './components/GasBuddySearch';
 import ChessMoveCard from './components/ChessMoveCard';
 import FinanceStocksPanel from './components/FinanceStocksPanel';
+import SportsPanel from './components/SportsPanel';
 
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const OIL_SOURCE_URL = 'https://markets.businessinsider.com/commodities/oil-price?op=1';
@@ -210,6 +211,7 @@ function saveCached(metrics) {
     // Don’t persist a markets-only failure — it would re-show the banner on every load until expiry.
     if (m.markets?.error && !m.markets?.fetchedAt) m.markets = null;
     if (m.rates?.error && !m.rates?.fetchedAt) m.rates = null;
+    if (m.sports?.error && !m.sports?.fetchedAt) m.sports = null;
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ at: Date.now(), metrics: m }));
   } catch {
     // ignore storage failures
@@ -278,6 +280,12 @@ function App() {
     return { chess };
   }, [base]);
 
+  const fetchSports = useCallback(async ({ bypassCache = false } = {}) => {
+    const q = bypassCache ? '?refresh=1' : '';
+    const sports = await fetch(`${base}/sports${q}`).then((r) => r.json());
+    return { sports };
+  }, [base]);
+
   const fetchActiveTab = useCallback(
     async (tab, { showLoading = false, bypassCache = false } = {}) => {
       if (showLoading) setLoading(true);
@@ -296,6 +304,7 @@ function App() {
         else if (tab === 'FinanceOverview') partial = await fetchFinance({ bypassCache });
         else if (tab === 'FinanceStocks') partial = {};
         else if (tab === 'Weather') partial = await fetchWeather();
+        else if (tab === 'Sports') partial = await fetchSports({ bypassCache });
         else if (tab === 'Chess') partial = await fetchChess();
         else partial = {};
 
@@ -311,7 +320,7 @@ function App() {
         setLoading(false);
       }
     },
-    [fetchGasAll, fetchOil, fetchFinance, fetchWeather, fetchChess]
+    [fetchGasAll, fetchOil, fetchFinance, fetchWeather, fetchSports, fetchChess]
   );
 
   const refreshNow = useCallback(
@@ -321,7 +330,9 @@ function App() {
 
   const prefetchOtherTabs = useCallback(async () => {
     // Don't block render; best-effort background fill.
-    const tabs = ['Gas', 'Oil', 'FinanceOverview', 'Weather', 'Chess'].filter((t) => t !== activeTab);
+    const tabs = ['Gas', 'Oil', 'FinanceOverview', 'Weather', 'Sports', 'Chess'].filter(
+      (t) => t !== activeTab
+    );
     for (const t of tabs) {
       // only fetch if we don't have the main data yet
       const hasData =
@@ -329,6 +340,7 @@ function App() {
         (t === 'Oil' && metrics.brent && metrics.wti) ||
         (t === 'FinanceOverview' && metrics.rates?.fetchedAt && metrics.markets?.fetchedAt) ||
         (t === 'Weather' && metrics.weather) ||
+        (t === 'Sports' && metrics.sports?.fetchedAt) ||
         (t === 'Chess' && metrics.chess);
       if (!hasData) {
         // eslint-disable-next-line no-await-in-loop
@@ -604,6 +616,7 @@ function App() {
             <WeatherCard data={metrics.weather} apiBase={base} />
           </section>
         )}
+        {activeTab === 'Sports' && <SportsPanel data={metrics.sports} />}
         {activeTab === 'Chess' && (
           <section className="tab-content">
             <ChessMoveCard data={metrics.chess} />

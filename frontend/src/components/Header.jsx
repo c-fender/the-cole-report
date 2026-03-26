@@ -12,7 +12,7 @@ const FINANCE_SUBTABS = [
   { id: 'FinanceStocks', label: 'Stocks' },
 ];
 
-const OTHER_TABS = ['Weather', 'Chess'];
+const OTHER_TABS = ['Weather', 'Sports', 'Chess'];
 
 function isEnergyTab(tab) {
   return tab === 'Gas' || tab === 'Oil';

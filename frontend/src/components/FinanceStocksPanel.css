@@ -1,6 +1,10 @@
 .finance-stocks {
-  max-width: 960px;
-  margin: 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  text-align: left;
+  flex: 1 1 100%;
 }
 
 .finance-stocks--loading,
