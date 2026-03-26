@@ -106,6 +106,71 @@
   gap: 0;
   padding: 0 1.5rem;
   border-top: 1px solid var(--border);
+  position: relative;
+}
+
+.tab-group {
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* Stack menu above adjacent tabs so the dropdown is not painted under Finance / Weather. */
+.tab-group-open {
+  z-index: 60;
+}
+
+.tab-group-active .tab-btn-energy:not(.tab-btn-energy-open) {
+  color: var(--accent-blue);
+  border-bottom-color: var(--accent-blue);
+}
+
+.tab-btn-energy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tab-btn-chevron {
+  font-size: 0.65rem;
+  opacity: 0.85;
+}
+
+.tab-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: -1px;
+  min-width: 10rem;
+  padding: 0.25rem 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0 0 4px 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 50;
+}
+
+.tab-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 0.6rem 1rem;
+  border: none;
+  background: none;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.tab-dropdown-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.tab-dropdown-item-active {
+  color: var(--accent-blue);
+  font-weight: 600;
 }
 
 .tab-btn {
@@ -133,7 +198,7 @@
 @media (max-width: 768px) {
   .header-tabs {
     overflow-x: auto;
-    overflow-y: hidden;
+    overflow-y: visible;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none; /* Firefox */
     white-space: nowrap;

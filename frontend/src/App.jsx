@@ -6,6 +6,7 @@ import MetricCard from './components/MetricCard';
 import WeatherCard from './components/WeatherCard';
 import GasBuddySearch from './components/GasBuddySearch';
 import ChessMoveCard from './components/ChessMoveCard';
+import FinanceStocksPanel from './components/FinanceStocksPanel';
 
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const OIL_SOURCE_URL = 'https://markets.businessinsider.com/commodities/oil-price?op=1';
@@ -292,7 +293,8 @@ function App() {
         let partial = null;
         if (tab === 'Gas') partial = await fetchGasAll();
         else if (tab === 'Oil') partial = await fetchOil();
-        else if (tab === 'Finance') partial = await fetchFinance({ bypassCache });
+        else if (tab === 'FinanceOverview') partial = await fetchFinance({ bypassCache });
+        else if (tab === 'FinanceStocks') partial = {};
         else if (tab === 'Weather') partial = await fetchWeather();
         else if (tab === 'Chess') partial = await fetchChess();
         else partial = {};
@@ -319,13 +321,13 @@ function App() {
 
   const prefetchOtherTabs = useCallback(async () => {
     // Don't block render; best-effort background fill.
-    const tabs = ['Gas', 'Oil', 'Finance', 'Weather', 'Chess'].filter((t) => t !== activeTab);
+    const tabs = ['Gas', 'Oil', 'FinanceOverview', 'Weather', 'Chess'].filter((t) => t !== activeTab);
     for (const t of tabs) {
       // only fetch if we don't have the main data yet
       const hasData =
         (t === 'Gas' && metrics.gas && metrics.gasNc && metrics.gasSc && metrics.gasCharlotte) ||
         (t === 'Oil' && metrics.brent && metrics.wti) ||
-        (t === 'Finance' && metrics.rates?.fetchedAt && metrics.markets?.fetchedAt) ||
+        (t === 'FinanceOverview' && metrics.rates?.fetchedAt && metrics.markets?.fetchedAt) ||
         (t === 'Weather' && metrics.weather) ||
         (t === 'Chess' && metrics.chess);
       if (!hasData) {
@@ -374,6 +376,7 @@ function App() {
         loading={loading}
         activeTab={activeTab}
         onTabChange={setActiveTab}
+        apiBase={base}
       />
       <main className="main">
         {activeTab === 'Gas' && (
@@ -472,7 +475,7 @@ function App() {
             />
           </section>
         )}
-        {activeTab === 'Finance' && (
+        {activeTab === 'FinanceOverview' && (
           <section className="tab-content">
             <div className="oil-header finance-header-meta">
               <span>
@@ -592,6 +595,9 @@ function App() {
               </div>
             )}
           </section>
+        )}
+        {activeTab === 'FinanceStocks' && (
+          <FinanceStocksPanel apiBase={base} lastRefresh={lastRefresh} />
         )}
         {activeTab === 'Weather' && (
           <section className="tab-content">

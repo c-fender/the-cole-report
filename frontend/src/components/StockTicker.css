@@ -1,0 +1,151 @@
+.stock-ticker {
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.stock-ticker--interactive {
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.stock-ticker--interactive:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.stock-ticker--interactive:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
+}
+
+.stock-ticker--skeleton {
+  min-height: 2rem;
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 0%,
+    var(--bg-secondary) 50%,
+    var(--bg-tertiary) 100%
+  );
+  background-size: 200% 100%;
+  animation: stock-ticker-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes stock-ticker-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.stock-ticker-viewport {
+  overflow: hidden;
+  width: 100%;
+}
+
+.stock-ticker-row {
+  display: flex;
+  width: max-content;
+  animation: stock-ticker-scroll 52s linear infinite;
+}
+
+@keyframes stock-ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stock-ticker-row {
+    animation: none;
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: center;
+    row-gap: 0.35rem;
+    padding: 0.45rem 0.75rem;
+  }
+
+  .stock-ticker-segment {
+    display: contents;
+  }
+
+  .stock-ticker-segment[aria-hidden='true'] {
+    display: none;
+  }
+
+  .stock-ticker--skeleton {
+    animation: none;
+    background: var(--bg-tertiary);
+  }
+}
+
+.stock-ticker-segment {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  padding: 0.45rem 0;
+}
+
+.stock-ticker-item {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.stock-ticker-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  color: inherit;
+  padding: 0.2rem 0.15rem;
+  border-radius: 3px;
+}
+
+.stock-ticker-label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.stock-ticker-symbol {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+}
+
+.stock-ticker-price {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.stock-ticker-chg {
+  font-weight: 600;
+  min-width: 3.25rem;
+}
+
+.stock-ticker-chg.is-up {
+  color: var(--accent-green);
+}
+
+.stock-ticker-chg.is-down {
+  color: var(--accent-red);
+}
+
+.stock-ticker-muted {
+  color: var(--text-muted);
+}
+
+.stock-ticker-sep {
+  color: var(--text-muted);
+  padding: 0 0.65rem;
+  user-select: none;
+}

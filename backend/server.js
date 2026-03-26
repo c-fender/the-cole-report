@@ -280,7 +280,46 @@ app.get('/api/rates', async (req, res) => {
 const marketsCache = makeCache(2 * 60 * 1000); // 2 min — balances freshness vs upstream limits
 const YAHOO_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
 
-/** Yahoo Finance chart API — used for metals futures and major indices (no API key). */
+/** Sample std dev of the last 5 daily % moves from 6 consecutive closes (oldest → newest). */
+function computeWeeklyVolatilityFromCloses(closes) {
+  if (!Array.isArray(closes) || closes.length < 6) return null;
+  const nums = closes.map((c) => Number(c)).filter((c) => !Number.isNaN(c));
+  if (nums.length < 6) return null;
+  const last6 = nums.slice(-6);
+  const dailyPct = [];
+  for (let i = 1; i < last6.length; i += 1) {
+    const prev = last6[i - 1];
+    const cur = last6[i];
+    if (prev === 0) return null;
+    dailyPct.push(((cur - prev) / prev) * 100);
+  }
+  const mean = dailyPct.reduce((a, b) => a + b, 0) / dailyPct.length;
+  const variance = dailyPct.reduce((s, x) => s + (x - mean) ** 2, 0) / dailyPct.length;
+  const std = Math.sqrt(variance);
+  return Number.isFinite(std) ? std : null;
+}
+
+/** Daily close series for volatility — meta fields here are not used (see fetchYahooQuote for quote/day %). */
+async function fetchYahooDailyCloses(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=3mo`;
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(12000),
+    headers: { 'User-Agent': YAHOO_UA },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (data?.chart?.error) {
+    const ce = data.chart.error;
+    throw new Error(
+      typeof ce === 'string' ? ce : ce.description || ce.code || JSON.stringify(ce)
+    );
+  }
+  const r = data?.chart?.result?.[0];
+  if (!r) throw new Error('No chart data');
+  const closesRaw = r.indicators?.quote?.[0]?.close;
+  return Array.isArray(closesRaw) ? closesRaw : [];
+}
+
 async function fetchYahooQuote(symbol) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
   const res = await fetch(url, {
@@ -300,10 +339,19 @@ async function fetchYahooQuote(symbol) {
   const meta = r.meta;
   const price = meta.regularMarketPrice ?? meta.previousClose;
   if (price == null) throw new Error('No price');
-  let changePct = meta.regularMarketChangePercent;
-  if (changePct == null && meta.regularMarketPrice != null && meta.chartPreviousClose) {
-    changePct =
-      ((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose) * 100;
+  /** Prefer price vs previous close — matches Yahoo UI; `regularMarketChangePercent` can be inconsistent across ranges. */
+  let changePct = null;
+  const prevClose = meta.chartPreviousClose ?? meta.previousClose;
+  if (meta.regularMarketPrice != null && prevClose != null) {
+    const prev = Number(prevClose);
+    const cur = Number(meta.regularMarketPrice);
+    if (prev !== 0 && Number.isFinite(prev) && Number.isFinite(cur)) {
+      changePct = ((cur - prev) / prev) * 100;
+    }
+  }
+  if (changePct == null && meta.regularMarketChangePercent != null) {
+    const raw = Number(meta.regularMarketChangePercent);
+    if (Number.isFinite(raw)) changePct = raw;
   }
   return {
     price: Number(price),
@@ -396,6 +444,91 @@ app.get('/api/markets', async (req, res) => {
     console.error('[api/markets]', err);
     res.status(200).json({
       error: 'Markets bundle failed',
+      details: String(err?.message || err),
+    });
+  }
+});
+
+/** Large-cap names for the header ticker (Yahoo chart API). */
+const TICKER_SYMBOLS = [
+  ['AAPL', 'Apple'],
+  ['MSFT', 'Microsoft'],
+  ['GOOGL', 'Alphabet'],
+  ['AMZN', 'Amazon'],
+  ['NVDA', 'NVIDIA'],
+  ['META', 'Meta'],
+  ['TSLA', 'Tesla'],
+  ['JPM', 'JPMorgan'],
+  ['V', 'Visa'],
+  ['UNH', 'UnitedHealth'],
+  ['XOM', 'Exxon'],
+  ['WMT', 'Walmart'],
+  ['AVGO', 'Broadcom'],
+  ['LLY', 'Eli Lilly'],
+  ['COST', 'Costco'],
+  ['MA', 'Mastercard'],
+  ['HD', 'Home Depot'],
+];
+
+async function buildTickerBundle() {
+  try {
+    const fetchedAt = new Date().toISOString();
+    const items = await Promise.all(
+      TICKER_SYMBOLS.map(async ([symbol, label]) => {
+        try {
+          const [q, closes] = await Promise.all([
+            fetchYahooQuote(symbol),
+            fetchYahooDailyCloses(symbol).catch(() => []),
+          ]);
+          return {
+            symbol,
+            label,
+            price: q.price,
+            changePct: q.changePct,
+            weeklyVolatilityPct: computeWeeklyVolatilityFromCloses(closes),
+          };
+        } catch (e) {
+          return { symbol, label, error: e.message };
+        }
+      })
+    );
+    items.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    const withVol = items.filter(
+      (it) => it.weeklyVolatilityPct != null && !it.error
+    );
+    const topWeeklyVolatility = [...withVol]
+      .sort((a, b) => b.weeklyVolatilityPct - a.weeklyVolatilityPct)
+      .slice(0, 5)
+      .map((it) => ({
+        symbol: it.symbol,
+        label: it.label,
+        price: it.price,
+        changePct: it.changePct,
+        weeklyVolatilityPct: it.weeklyVolatilityPct,
+      }));
+    return { fetchedAt, items, topWeeklyVolatility };
+  } catch (e) {
+    console.error('[buildTickerBundle]', e);
+    return { error: 'Ticker bundle failed', details: String(e?.message || e) };
+  }
+}
+
+const tickerCache = makeCache(90 * 1000);
+
+app.get('/api/ticker', async (req, res) => {
+  try {
+    const refresh =
+      req.query?.refresh === '1' || req.query?.refresh === 'true' || req.query?.refresh === 'yes';
+    if (refresh) {
+      tickerCache.value = null;
+      tickerCache.at = 0;
+    }
+    const payload = await withMarketsCache(tickerCache, () => buildTickerBundle());
+    res.status(200).json(payload);
+  } catch (err) {
+    console.error('[api/ticker]', err);
+    res.status(200).json({
+      error: 'Ticker bundle failed',
       details: String(err?.message || err),
     });
   }
@@ -985,6 +1118,6 @@ app.get('/api/weather', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Cole Report API proxy running on http://localhost:${PORT}`);
   console.log(
-    'Routes include GET /api/health, GET /api/rates, GET /api/markets — restart after git pull if routes 404.'
+    'Routes include GET /api/health, GET /api/rates, GET /api/markets, GET /api/ticker — restart after git pull if routes 404.'
   );
 });
