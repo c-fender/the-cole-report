@@ -75,12 +75,52 @@
   background: var(--bg-tertiary);
 }
 
+.chess-btn-muted {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.chess-btn-muted:hover {
+  color: var(--text-primary);
+}
+
 .chess-guess-form {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
   margin: 0 0 0.6rem;
+}
+
+.chess-move-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+}
+
+.chess-move-row-solved {
+  flex-wrap: nowrap;
+}
+
+.chess-move-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--accent-green, #3fb950);
+}
+
+.chess-move-step-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  min-width: 3.5rem;
+}
+
+.chess-guess-input-locked {
+  opacity: 0.9;
+  cursor: default;
 }
 
 .chess-guess-input {

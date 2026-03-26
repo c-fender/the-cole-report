@@ -1,6 +1,6 @@
 import './Header.css';
 
-const TABS = ['Gas', 'Oil', 'Treasury', 'Weather', 'Chess'];
+const TABS = ['Gas', 'Oil', 'Finance', 'Weather', 'Chess'];
 
 export default function Header({ lastRefresh, onRefresh, loading, activeTab, onTabChange }) {
   const timeStr = lastRefresh

@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import cheerio from 'cheerio';
+import { Chess } from 'chess.js';
 
 dotenv.config();
 
@@ -10,6 +11,11 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+/** Quick check that you hit this repo’s API (not an old process without /api/markets). */
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, service: 'cole-report-api' });
+});
 
 function makeCache(ttlMs) {
   return { ttlMs, at: 0, value: null, inflight: null };
@@ -22,6 +28,50 @@ async function withCache(cache, buildFn) {
     cache.inflight = Promise.resolve()
       .then(buildFn)
       .then((val) => {
+        cache.value = val;
+        cache.at = Date.now();
+        return val;
+      })
+      .finally(() => {
+        cache.inflight = null;
+      });
+  }
+  return cache.inflight;
+}
+
+/** Like `withCache`, but does not cache failed bundles (`{ error }` without `fetchedAt`). */
+async function withMarketsCache(cache, buildFn) {
+  const now = Date.now();
+  if (cache.value && now - cache.at < cache.ttlMs) return cache.value;
+  if (!cache.inflight) {
+    cache.inflight = Promise.resolve()
+      .then(buildFn)
+      .then((val) => {
+        if (val && typeof val === 'object' && val.error != null && val.fetchedAt == null) {
+          return val;
+        }
+        cache.value = val;
+        cache.at = Date.now();
+        return val;
+      })
+      .finally(() => {
+        cache.inflight = null;
+      });
+  }
+  return cache.inflight;
+}
+
+/** Like `withMarketsCache`, for the FRED rates bundle. */
+async function withRatesCache(cache, buildFn) {
+  const now = Date.now();
+  if (cache.value && now - cache.at < cache.ttlMs) return cache.value;
+  if (!cache.inflight) {
+    cache.inflight = Promise.resolve()
+      .then(buildFn)
+      .then((val) => {
+        if (val && typeof val === 'object' && val.error != null && val.fetchedAt == null) {
+          return val;
+        }
         cache.value = val;
         cache.at = Date.now();
         return val;
@@ -64,6 +114,8 @@ async function fetchEiaSeries(seriesId, key, label) {
 const brentCache = makeCache(15 * 60 * 1000);
 const wtiCache = makeCache(15 * 60 * 1000);
 const treasuryCache = makeCache(15 * 60 * 1000);
+const sofrCache = makeCache(15 * 60 * 1000);
+const ratesCache = makeCache(15 * 60 * 1000);
 const weatherCache = makeCache(10 * 60 * 1000);
 const chessCache = makeCache(6 * 60 * 60 * 1000);
 const geocodeZipCache = new Map(); // zip -> { at, payload, inflight }
@@ -116,34 +168,390 @@ app.get('/api/treasury', async (req, res) => {
   }
 });
 
-// Chess move of the day (Chess.com daily puzzle)
+/** Latest observation from a FRED single-series CSV (same pattern as SOFR). */
+function parseFredLatestCsv(csvText, { name, sourceUrl }) {
+  const lines = csvText.trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return { error: `${name} data empty` };
+  let last = null;
+  for (let i = lines.length - 1; i >= 1; i -= 1) {
+    const parts = lines[i].split(',');
+    if (parts.length < 2) continue;
+    const date = parts[0].trim();
+    const val = parts[1].trim();
+    if (val === '.' || val === '') continue;
+    const num = Number.parseFloat(val);
+    if (!Number.isNaN(num)) {
+      last = { date, rate: num };
+      break;
+    }
+  }
+  if (!last) return { error: `No ${name} value found` };
+  return {
+    name,
+    rate: last.rate,
+    date: last.date,
+    unit: 'percent',
+    source: 'fred',
+    sourceUrl,
+  };
+}
+
+async function fetchFredLatest(seriesId, displayName, sourceUrl) {
+  const res = await fetch(
+    `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${encodeURIComponent(seriesId)}`,
+    {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    }
+  );
+  if (!res.ok) throw new Error(`FRED ${seriesId} HTTP ${res.status}`);
+  const parsed = parseFredLatestCsv(await res.text(), { name: displayName, sourceUrl });
+  if (parsed.error) throw new Error(parsed.error);
+  return parsed;
+}
+
+async function fetchFredSofr() {
+  return fetchFredLatest('SOFR', 'SOFR', 'https://fred.stlouisfed.org/series/SOFR');
+}
+
+async function buildFredRatesBundle() {
+  try {
+    const out = { fetchedAt: new Date().toISOString() };
+    const defs = [
+      ['sofr', 'SOFR', 'SOFR', 'https://fred.stlouisfed.org/series/SOFR'],
+      ['fedFunds', 'DFF', 'Fed funds effective', 'https://fred.stlouisfed.org/series/DFF'],
+      ['dgs10', 'DGS10', '10Y Treasury', 'https://fred.stlouisfed.org/series/DGS10'],
+      ['dgs2', 'DGS2', '2Y Treasury', 'https://fred.stlouisfed.org/series/DGS2'],
+    ];
+    await Promise.all(
+      defs.map(async ([key, seriesId, label, pageUrl]) => {
+        try {
+          out[key] = await fetchFredLatest(seriesId, label, pageUrl);
+        } catch (e) {
+          out[key] = { error: e.message };
+        }
+      })
+    );
+    return out;
+  } catch (e) {
+    console.error('[buildFredRatesBundle]', e);
+    return {
+      error: 'Rates bundle failed',
+      details: String(e?.message || e),
+    };
+  }
+}
+
+app.get('/api/sofr', async (req, res) => {
+  try {
+    const refresh =
+      req.query?.refresh === '1' || req.query?.refresh === 'true' || req.query?.refresh === 'yes';
+    if (refresh) {
+      sofrCache.value = null;
+      sofrCache.at = 0;
+    }
+    const payload = await withCache(sofrCache, () => fetchFredSofr());
+    res.json(payload);
+  } catch (err) {
+    res.json({ error: 'SOFR fetch failed', details: err.message });
+  }
+});
+
+/** SOFR + Fed funds + Treasury curve spots — FRED CSV, no API key. */
+app.get('/api/rates', async (req, res) => {
+  try {
+    const refresh =
+      req.query?.refresh === '1' || req.query?.refresh === 'true' || req.query?.refresh === 'yes';
+    if (refresh) {
+      ratesCache.value = null;
+      ratesCache.at = 0;
+    }
+    const payload = await withRatesCache(ratesCache, () => buildFredRatesBundle());
+    res.status(200).json(payload);
+  } catch (err) {
+    console.error('[api/rates]', err);
+    res.status(200).json({
+      error: 'Rates bundle failed',
+      details: String(err?.message || err),
+    });
+  }
+});
+
+const marketsCache = makeCache(2 * 60 * 1000); // 2 min — balances freshness vs upstream limits
+const YAHOO_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+
+/** Yahoo Finance chart API — used for metals futures and major indices (no API key). */
+async function fetchYahooQuote(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(12000),
+    headers: { 'User-Agent': YAHOO_UA },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (data?.chart?.error) {
+    const ce = data.chart.error;
+    throw new Error(
+      typeof ce === 'string' ? ce : ce.description || ce.code || JSON.stringify(ce)
+    );
+  }
+  const r = data?.chart?.result?.[0];
+  if (!r) throw new Error('No chart data');
+  const meta = r.meta;
+  const price = meta.regularMarketPrice ?? meta.previousClose;
+  if (price == null) throw new Error('No price');
+  let changePct = meta.regularMarketChangePercent;
+  if (changePct == null && meta.regularMarketPrice != null && meta.chartPreviousClose) {
+    changePct =
+      ((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose) * 100;
+  }
+  return {
+    price: Number(price),
+    currency: meta.currency || 'USD',
+    symbol: meta.symbol || symbol,
+    changePct: changePct != null ? Number(changePct) : null,
+    source: 'yahoo',
+  };
+}
+
+async function fetchCoinGeckoCrypto() {
+  const url =
+    'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,ripple&vs_currencies=usd&include_24hr_change=true';
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(12000),
+    headers: { 'User-Agent': YAHOO_UA },
+  });
+  if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status}`);
+  const data = await res.json();
+  const coin = (id) => {
+    const o = data?.[id];
+    if (o?.usd == null) return { error: `CoinGecko missing ${id}` };
+    return {
+      price: o.usd,
+      change24hPct: o.usd_24h_change ?? null,
+      source: 'coingecko',
+    };
+  };
+  return {
+    bitcoin: coin('bitcoin'),
+    ethereum: coin('ethereum'),
+    xrp: coin('ripple'),
+  };
+}
+
+async function buildMarketsBundle() {
+  try {
+    const out = { fetchedAt: new Date().toISOString() };
+
+    const yahooPairs = [
+      ['gold', 'GC=F'],
+      ['silver', 'SI=F'],
+      ['platinum', 'PL=F'],
+      ['dow', '^DJI'],
+      ['nasdaq', '^IXIC'],
+      ['sp500', '^GSPC'],
+    ];
+
+    await Promise.all(
+      yahooPairs.map(async ([key, sym]) => {
+        try {
+          out[key] = await fetchYahooQuote(sym);
+        } catch (e) {
+          out[key] = { error: e.message };
+        }
+      })
+    );
+
+    try {
+      const cg = await fetchCoinGeckoCrypto();
+      Object.assign(out, cg);
+    } catch (e) {
+      const msg = e.message;
+      out.bitcoin = { error: msg };
+      out.ethereum = { error: msg };
+      out.xrp = { error: msg };
+    }
+
+    return out;
+  } catch (e) {
+    console.error('[buildMarketsBundle]', e);
+    return {
+      error: 'Markets bundle failed',
+      details: String(e?.message || e),
+    };
+  }
+}
+
+app.get('/api/markets', async (req, res) => {
+  try {
+    const refresh =
+      req.query?.refresh === '1' || req.query?.refresh === 'true' || req.query?.refresh === 'yes';
+    if (refresh) {
+      marketsCache.value = null;
+      marketsCache.at = 0;
+    }
+    const payload = await withMarketsCache(marketsCache, () => buildMarketsBundle());
+    res.status(200).json(payload);
+  } catch (err) {
+    console.error('[api/markets]', err);
+    res.status(200).json({
+      error: 'Markets bundle failed',
+      details: String(err?.message || err),
+    });
+  }
+});
+
+function parseChessComMoveOfDay(data) {
+  if (data?.error) return data;
+  const line = typeof data?.pgn === 'string' ? data.pgn : '';
+  const moveText = line
+    .split(/\r?\n\r?\n/)
+    .slice(-1)[0]
+    .replace(/\[[^\]]+\]/g, '')
+    .trim();
+  const moveTokens = moveText
+    .replace(/\r?\n/g, ' ')
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t) => !/^\d+\.+$/.test(t) && !/^(1-0|0-1|1\/2-1\/2|\*)$/.test(t));
+  const suggested = moveTokens.length > 0 ? moveTokens[0] : null;
+  return {
+    source: 'chesscom',
+    title: data?.title ?? 'Chess Move of the Day',
+    url: data?.url ?? 'https://www.chess.com/daily-chess-puzzle',
+    image: data?.image ?? null,
+    fen: data?.fen ?? null,
+    pgn: data?.pgn ?? null,
+    suggestedMove: suggested,
+    solutionSan: moveTokens.length ? moveTokens : null,
+    published: data?.publish_time ?? null,
+  };
+}
+
+function uciToSanFromFen(fen, uci) {
+  const move = String(uci || '').trim().toLowerCase();
+  const match = move.match(/^([a-h][1-8])([a-h][1-8])([qrbn])?$/);
+  if (!match) return null;
+  const game = new Chess(fen);
+  const result = game.move({
+    from: match[1],
+    to: match[2],
+    promotion: match[3] || undefined,
+  });
+  return result?.san ?? null;
+}
+
+function uciLineToSanLine(fen, uciMoves) {
+  const startFen = String(fen || '').trim();
+  if (!startFen) return null;
+  if (!Array.isArray(uciMoves) || uciMoves.length === 0) return null;
+
+  const game = new Chess(startFen);
+  const san = [];
+
+  for (const uci of uciMoves) {
+    const move = String(uci || '').trim().toLowerCase();
+    const match = move.match(/^([a-h][1-8])([a-h][1-8])([qrbn])?$/);
+    if (!match) return null;
+    const result = game.move({
+      from: match[1],
+      to: match[2],
+      promotion: match[3] || undefined,
+    });
+    if (!result?.san) return null;
+    san.push(result.san);
+  }
+
+  return san;
+}
+
+function buildFenAtInitialPly(pgn, initialPly) {
+  const fullGame = new Chess();
+  fullGame.loadPgn(String(pgn || ''));
+  const history = fullGame.history();
+  const baseGame = new Chess();
+  const ply = Number.isInteger(initialPly) ? initialPly : 0;
+  for (let i = 0; i < ply && i < history.length; i += 1) {
+    const ok = baseGame.move(history[i], { sloppy: true });
+    if (!ok) throw new Error('Could not reconstruct puzzle position');
+  }
+  return baseGame.fen();
+}
+
+function canPlayUciOnFen(fen, uci) {
+  const move = String(uci || '').trim().toLowerCase();
+  const match = move.match(/^([a-h][1-8])([a-h][1-8])([qrbn])?$/);
+  if (!match) return false;
+  try {
+    const game = new Chess(fen);
+    const result = game.move({
+      from: match[1],
+      to: match[2],
+      promotion: match[3] || undefined,
+    });
+    return !!result;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchLichessMoveOfDay() {
+  const data = await proxyFetch('https://lichess.org/api/puzzle/daily', 'Lichess daily puzzle fetch failed');
+  if (data?.error) throw new Error(data.error);
+  const pgn = data?.game?.pgn;
+  const initialPly = data?.puzzle?.initialPly;
+  const firstUciMove = data?.puzzle?.solution?.[0];
+  const candidatePlies = [initialPly, initialPly + 1, initialPly - 1, initialPly + 2].filter((v) =>
+    Number.isInteger(v)
+  );
+  let fen = null;
+  for (const ply of candidatePlies) {
+    try {
+      const candidateFen = buildFenAtInitialPly(pgn, ply);
+      if (canPlayUciOnFen(candidateFen, firstUciMove)) {
+        fen = candidateFen;
+        break;
+      }
+    } catch {
+      // Try the next candidate if this ply cannot be reconstructed.
+    }
+  }
+  if (!fen) throw new Error('Could not reconstruct a valid Lichess puzzle position');
+  const solutionUci = Array.isArray(data?.puzzle?.solution) ? data.puzzle.solution : [];
+  const solutionSan = uciLineToSanLine(fen, solutionUci);
+  const suggestedMove = solutionSan?.[0] ?? uciToSanFromFen(fen, firstUciMove);
+  if (!suggestedMove) throw new Error('Could not normalize Lichess solution move');
+  return {
+    source: 'lichess',
+    title: 'Lichess Daily Puzzle',
+    url: 'https://lichess.org/training/daily',
+    image: null,
+    fen,
+    pgn,
+    suggestedMove,
+    solutionSan: solutionSan?.length ? solutionSan : null,
+    published: null,
+  };
+}
+
+async function fetchChessComMoveOfDay() {
+  const data = await proxyFetch('https://api.chess.com/pub/puzzle', 'Chess puzzle fetch failed');
+  const parsed = parseChessComMoveOfDay(data);
+  if (parsed?.error) throw new Error(parsed.error);
+  return parsed;
+}
+
+// Chess move of the day (Lichess daily puzzle with Chess.com fallback)
 app.get('/api/chess/move-of-day', async (req, res) => {
   try {
     const payload = await withCache(chessCache, async () => {
-      const data = await proxyFetch('https://api.chess.com/pub/puzzle', 'Chess puzzle fetch failed');
-      if (data?.error) return data;
-      const line = typeof data?.pgn === 'string' ? data.pgn : '';
-      const moveText = line
-        .split(/\r?\n\r?\n/)
-        .slice(-1)[0]
-        .replace(/\[[^\]]+\]/g, '')
-        .trim();
-      const moveTokens = moveText
-        .replace(/\r?\n/g, ' ')
-        .split(/\s+/)
-        .map((t) => t.trim())
-        .filter(Boolean)
-        .filter((t) => !/^\d+\.+$/.test(t) && !/^(1-0|0-1|1\/2-1\/2|\*)$/.test(t));
-      const suggested = moveTokens.length > 0 ? moveTokens[0] : null;
-      return {
-        title: data?.title ?? 'Chess Move of the Day',
-        url: data?.url ?? 'https://www.chess.com/daily-chess-puzzle',
-        image: data?.image ?? null,
-        fen: data?.fen ?? null,
-        pgn: data?.pgn ?? null,
-        suggestedMove: suggested,
-        published: data?.publish_time ?? null,
-      };
+      try {
+        return await fetchLichessMoveOfDay();
+      } catch (lichessErr) {
+        console.warn('Lichess daily puzzle unavailable, falling back to Chess.com:', lichessErr.message);
+        return fetchChessComMoveOfDay();
+      }
     });
     res.json(payload);
   } catch (err) {
@@ -576,4 +984,7 @@ app.get('/api/weather', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Cole Report API proxy running on http://localhost:${PORT}`);
+  console.log(
+    'Routes include GET /api/health, GET /api/rates, GET /api/markets — restart after git pull if routes 404.'
+  );
 });

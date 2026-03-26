@@ -18,6 +18,16 @@
   color: var(--text-muted);
 }
 
+a.metric-title-link {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+a.metric-title-link:hover {
+  text-decoration: underline;
+}
+
 .metric-value {
   font-size: 1.25rem;
   font-weight: 600;
@@ -80,4 +90,25 @@
 
 .metric-details .metric-change {
   font-size: 0.75rem;
+}
+
+/* Finance-style % moves: up = green, down = red (Oil rows above use `change` + inverted .metric-change-up/down). */
+.metric-details .metric-detail-trend {
+  font-size: 0.75rem;
+}
+
+.metric-detail-trend {
+  font-weight: 500;
+}
+
+.metric-detail-trend--up {
+  color: var(--accent-green);
+}
+
+.metric-detail-trend--down {
+  color: var(--accent-red);
+}
+
+.metric-detail-trend--flat {
+  color: var(--text-muted);
 }

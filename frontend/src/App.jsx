@@ -9,8 +9,35 @@ import ChessMoveCard from './components/ChessMoveCard';
 
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const OIL_SOURCE_URL = 'https://markets.businessinsider.com/commodities/oil-price?op=1';
-const TREASURY_REF_URL = 'https://www.cnbc.com/us-treasurys/';
-const STORAGE_KEY = 'cole-report-cache-v1';
+/** FRED series pages for the Rates row (aligned with /api/rates keys). */
+const RATES_CARD_SOURCE_URLS = {
+  sofr: 'https://fred.stlouisfed.org/series/SOFR',
+  fedFunds: 'https://fred.stlouisfed.org/series/DFF',
+  dgs10: 'https://fred.stlouisfed.org/series/DGS10',
+  dgs2: 'https://fred.stlouisfed.org/series/DGS2',
+};
+
+const RATES_CARDS = [
+  ['sofr', 'SOFR (daily %)'],
+  ['fedFunds', 'Fed funds effective (%)'],
+  ['dgs10', '10Y Treasury (%)'],
+  ['dgs2', '2Y Treasury (%)'],
+];
+
+/** Yahoo / CoinGecko pages aligned with backend symbols. */
+const FINANCE_CARD_SOURCE_URLS = {
+  gold: 'https://finance.yahoo.com/quote/GC=F',
+  silver: 'https://finance.yahoo.com/quote/SI=F',
+  platinum: 'https://finance.yahoo.com/quote/PL=F',
+  dow: 'https://finance.yahoo.com/quote/%5EDJI',
+  nasdaq: 'https://finance.yahoo.com/quote/%5EIXIC',
+  sp500: 'https://finance.yahoo.com/quote/%5EGSPC',
+  bitcoin: 'https://www.coingecko.com/en/coins/bitcoin',
+  ethereum: 'https://www.coingecko.com/en/coins/ethereum',
+  xrp: 'https://www.coingecko.com/en/coins/xrp',
+};
+
+const STORAGE_KEY = 'cole-report-cache-v2';
 const CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 function formatAsOfDate(dateStr) {
@@ -19,6 +46,117 @@ function formatAsOfDate(dateStr) {
   return Number.isNaN(dt.getTime())
     ? dateStr
     : dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/** When the markets bundle was built on the server (ISO from API → local date + time). */
+function formatIsoTimestampLocal(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+/** Today’s date in the user’s local calendar (for “as of” headers). */
+function formatLocalToday() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return formatAsOfDate(`${y}-${m}-${day}`);
+}
+
+/** Keeps the displayed “today” in sync (tab focus, periodic tick, midnight rollover). */
+function useTodayFormatted() {
+  const [label, setLabel] = useState(() => formatLocalToday());
+  useEffect(() => {
+    const tick = () => setLabel(formatLocalToday());
+    tick();
+    const id = setInterval(tick, 60 * 1000);
+    window.addEventListener('focus', tick);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, []);
+  return label;
+}
+
+function formatUsdPrice(n) {
+  if (n == null || Number.isNaN(Number(n))) return null;
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n));
+}
+
+/** Avoid `VITE_API_URL=http://host:3001/api` turning into `.../api/api/...`. */
+function normalizeApiBaseUrl(raw) {
+  if (typeof raw !== 'string') return '';
+  const t = raw.trim().replace(/\/+$/, '');
+  if (t.endsWith('/api')) return t.slice(0, -4);
+  return t;
+}
+
+function marketsHtml404Message(text) {
+  if (!text || typeof text !== 'string') return null;
+  if (text.includes('Cannot GET') && /\/api\/markets/.test(text)) {
+    return {
+      error: 'Markets API not found on this server',
+      details:
+        'Nothing is handling GET /api/markets. Stop whatever is on port 3001 (or your VITE_API_URL port), then start this repo’s backend: cd backend && npm run dev — so the latest server.js is loaded.',
+    };
+  }
+  return null;
+}
+
+/** Never rejects — returns `{ error, details? }` on failure so Finance can show a real message. */
+async function fetchMarketsBundleSafe(apiBase, { refresh = false } = {}) {
+  const url = `${apiBase}/markets${refresh ? '?refresh=1' : ''}`;
+  try {
+    const r = await fetch(url);
+    const text = await r.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      const hint = marketsHtml404Message(text);
+      if (hint) return hint;
+      return {
+        error: 'Invalid response from markets API',
+        details: text ? text.slice(0, 200) : `HTTP ${r.status}`,
+      };
+    }
+    if (!r.ok) {
+      return {
+        error: data?.error || 'Markets request failed',
+        details: data?.details || `HTTP ${r.status}`,
+      };
+    }
+    return data;
+  } catch (e) {
+    return {
+      error: e?.message || 'Network error',
+      details:
+        'Check that the API server is running and /api/markets is reachable (same host as the app in production).',
+    };
+  }
+}
+
+function marketQuoteDetails(d) {
+  if (!d || d.error) return undefined;
+  if (d.change24hPct != null) {
+    const v = d.change24hPct;
+    const trend = v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+    return [{ label: '24h', value: `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, trend }];
+  }
+  if (d.changePct != null) {
+    const v = d.changePct;
+    const trend = v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
+    return [{ label: 'vs prev close', value: `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, trend }];
+  }
+  return undefined;
 }
 
 function getOilDoD(brentData) {
@@ -67,13 +205,18 @@ function loadCached() {
 
 function saveCached(metrics) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ at: Date.now(), metrics }));
+    const m = { ...metrics };
+    // Don’t persist a markets-only failure — it would re-show the banner on every load until expiry.
+    if (m.markets?.error && !m.markets?.fetchedAt) m.markets = null;
+    if (m.rates?.error && !m.rates?.fetchedAt) m.rates = null;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ at: Date.now(), metrics: m }));
   } catch {
     // ignore storage failures
   }
 }
 
 function App() {
+  const todayLabel = useTodayFormatted();
   const [activeTab, setActiveTab] = useState('Gas');
   const [metrics, setMetrics] = useState({
     gas: null,
@@ -82,7 +225,8 @@ function App() {
     gasCharlotte: null,
     brent: null,
     wti: null,
-    treasury: null,
+    rates: null,
+    markets: null,
     weather: null,
     chess: null,
   });
@@ -90,7 +234,7 @@ function App() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const coldStartNotedRef = useRef(false);
 
-  const apiBase = import.meta.env.VITE_API_URL || '';
+  const apiBase = normalizeApiBaseUrl(import.meta.env.VITE_API_URL || '');
   const base = apiBase ? `${apiBase}/api` : '/api';
 
   const fetchGasAll = useCallback(async () => {
@@ -112,9 +256,15 @@ function App() {
     return { brent, wti };
   }, [base]);
 
-  const fetchTreasury = useCallback(async () => {
-    const treasury = await fetch(`${base}/treasury`).then((r) => r.json());
-    return { treasury };
+  const fetchFinance = useCallback(async ({ bypassCache = false } = {}) => {
+    const q = bypassCache ? '?refresh=1' : '';
+    const [rates, markets] = await Promise.all([
+      fetch(`${base}/rates${q}`)
+        .then((r) => r.json())
+        .catch(() => ({ error: 'Rates fetch failed' })),
+      fetchMarketsBundleSafe(base, { refresh: bypassCache }),
+    ]);
+    return { rates, markets };
   }, [base]);
 
   const fetchWeather = useCallback(async () => {
@@ -128,7 +278,7 @@ function App() {
   }, [base]);
 
   const fetchActiveTab = useCallback(
-    async (tab, { showLoading = false } = {}) => {
+    async (tab, { showLoading = false, bypassCache = false } = {}) => {
       if (showLoading) setLoading(true);
       try {
         const cached = loadCached();
@@ -142,7 +292,7 @@ function App() {
         let partial = null;
         if (tab === 'Gas') partial = await fetchGasAll();
         else if (tab === 'Oil') partial = await fetchOil();
-        else if (tab === 'Treasury') partial = await fetchTreasury();
+        else if (tab === 'Finance') partial = await fetchFinance({ bypassCache });
         else if (tab === 'Weather') partial = await fetchWeather();
         else if (tab === 'Chess') partial = await fetchChess();
         else partial = {};
@@ -159,23 +309,23 @@ function App() {
         setLoading(false);
       }
     },
-    [fetchGasAll, fetchOil, fetchTreasury, fetchWeather, fetchChess]
+    [fetchGasAll, fetchOil, fetchFinance, fetchWeather, fetchChess]
   );
 
-  const refreshNow = useCallback(() => fetchActiveTab(activeTab, { showLoading: true }), [
-    activeTab,
-    fetchActiveTab,
-  ]);
+  const refreshNow = useCallback(
+    () => fetchActiveTab(activeTab, { showLoading: true, bypassCache: true }),
+    [activeTab, fetchActiveTab]
+  );
 
   const prefetchOtherTabs = useCallback(async () => {
     // Don't block render; best-effort background fill.
-    const tabs = ['Gas', 'Oil', 'Treasury', 'Weather', 'Chess'].filter((t) => t !== activeTab);
+    const tabs = ['Gas', 'Oil', 'Finance', 'Weather', 'Chess'].filter((t) => t !== activeTab);
     for (const t of tabs) {
       // only fetch if we don't have the main data yet
       const hasData =
         (t === 'Gas' && metrics.gas && metrics.gasNc && metrics.gasSc && metrics.gasCharlotte) ||
         (t === 'Oil' && metrics.brent && metrics.wti) ||
-        (t === 'Treasury' && metrics.treasury) ||
+        (t === 'Finance' && metrics.rates?.fetchedAt && metrics.markets?.fetchedAt) ||
         (t === 'Weather' && metrics.weather) ||
         (t === 'Chess' && metrics.chess);
       if (!hasData) {
@@ -322,26 +472,125 @@ function App() {
             />
           </section>
         )}
-        {activeTab === 'Treasury' && (
+        {activeTab === 'Finance' && (
           <section className="tab-content">
-            <div className="oil-header">
-              <span>Full curve &amp; context (market data delayed)</span>
-              <a href={TREASURY_REF_URL} target="_blank" rel="noopener noreferrer">
-                CNBC US Treasurys
-              </a>
+            <div className="oil-header finance-header-meta">
+              <span>
+                Calendar as of: <code>{todayLabel}</code>
+              </span>
+              {metrics.markets?.fetchedAt ? (
+                <span className="finance-quotes-refreshed">
+                  Quotes refreshed: <code>{formatIsoTimestampLocal(metrics.markets.fetchedAt)}</code>
+                </span>
+              ) : null}
             </div>
-            <MetricCard
-              title="US 10Y Treasury (%)"
-              data={metrics.treasury}
-              parse={(d) => {
-                if (d?.Note || d?.['Error Message']) return null;
-                const arr = d?.data ?? Object.values(d).find(Array.isArray);
-                if (!arr?.length) return null;
-                const latest = arr[0];
-                const val = latest?.value ?? latest?.[1];
-                return val != null ? `${Number(val).toFixed(2)}%` : null;
-              }}
-            />
+            <p className="finance-asof-hint">
+              Rate cards use FRED’s observation date. Metals, indices, and crypto are Yahoo / CoinGecko
+              snapshots at the refresh time above.
+            </p>
+            {metrics.markets?.error && !metrics.markets?.fetchedAt ? (
+              <div className="finance-markets-banner error">
+                Markets data unavailable: {String(metrics.markets.error)}
+                {metrics.markets.details ? (
+                  <span className="finance-markets-error-detail"> — {String(metrics.markets.details)}</span>
+                ) : null}
+              </div>
+            ) : null}
+            {metrics.rates == null && metrics.markets == null ? (
+              <div className="finance-markets-banner">Loading finance…</div>
+            ) : (
+              <div className="finance-markets">
+                <div className="finance-market-section">
+                  <h3 className="finance-market-section-title">Rates</h3>
+                  <div className="finance-market-section-grid">
+                    {RATES_CARDS.map(([key, title]) => (
+                      <MetricCard
+                        key={key}
+                        title={title}
+                        data={metrics.rates?.[key]}
+                        sourceLink={{ href: RATES_CARD_SOURCE_URLS[key] }}
+                        parse={(d) => {
+                          if (d?.error) return null;
+                          if (d?.rate == null || Number.isNaN(Number(d.rate))) return null;
+                          return `${Number(d.rate).toFixed(2)}%`;
+                        }}
+                        details={
+                          metrics.rates?.[key]?.date && !metrics.rates?.[key]?.error
+                            ? [{ label: 'as of', value: String(metrics.rates[key].date) }]
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="finance-market-section">
+                  <h3 className="finance-market-section-title">Precious metals</h3>
+                  <div className="finance-market-section-grid">
+                    {[
+                      ['gold', 'Gold (COMEX)'],
+                      ['silver', 'Silver (COMEX)'],
+                      ['platinum', 'Platinum (NYMEX)'],
+                    ].map(([key, title]) => (
+                      <MetricCard
+                        key={key}
+                        title={title}
+                        data={metrics.markets?.[key]}
+                        sourceLink={{ href: FINANCE_CARD_SOURCE_URLS[key] }}
+                        details={marketQuoteDetails(metrics.markets?.[key])}
+                        parse={(d) => {
+                          if (d?.error) return null;
+                          return formatUsdPrice(d?.price);
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="finance-market-section">
+                  <h3 className="finance-market-section-title">Indices</h3>
+                  <div className="finance-market-section-grid">
+                    {[
+                      ['dow', 'Dow Jones'],
+                      ['nasdaq', 'Nasdaq'],
+                      ['sp500', 'S&P 500'],
+                    ].map(([key, title]) => (
+                      <MetricCard
+                        key={key}
+                        title={title}
+                        data={metrics.markets?.[key]}
+                        sourceLink={{ href: FINANCE_CARD_SOURCE_URLS[key] }}
+                        details={marketQuoteDetails(metrics.markets?.[key])}
+                        parse={(d) => {
+                          if (d?.error) return null;
+                          return formatUsdPrice(d?.price);
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="finance-market-section">
+                  <h3 className="finance-market-section-title">Crypto</h3>
+                  <div className="finance-market-section-grid">
+                    {[
+                      ['bitcoin', 'Bitcoin'],
+                      ['ethereum', 'Ethereum'],
+                      ['xrp', 'XRP'],
+                    ].map(([key, title]) => (
+                      <MetricCard
+                        key={key}
+                        title={title}
+                        data={metrics.markets?.[key]}
+                        sourceLink={{ href: FINANCE_CARD_SOURCE_URLS[key] }}
+                        details={marketQuoteDetails(metrics.markets?.[key])}
+                        parse={(d) => {
+                          if (d?.error) return null;
+                          return formatUsdPrice(d?.price);
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         )}
         {activeTab === 'Weather' && (

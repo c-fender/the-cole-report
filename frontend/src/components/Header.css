@@ -129,3 +129,22 @@
   color: var(--accent-blue);
   border-bottom-color: var(--accent-blue);
 }
+
+@media (max-width: 768px) {
+  .header-tabs {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; /* Firefox */
+    white-space: nowrap;
+  }
+
+  .header-tabs::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
+  }
+
+  .tab-btn {
+    flex: 0 0 auto;
+    padding: 0.75rem 1rem;
+  }
+}

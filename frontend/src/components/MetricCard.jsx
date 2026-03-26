@@ -1,17 +1,31 @@
 import './MetricCard.css';
 
-export default function MetricCard({ title, data, parse, change, details }) {
+/** Optional `sourceLink.href` — title becomes a same-style link (underline on hover). */
+export default function MetricCard({ title, data, parse, change, details, sourceLink }) {
   const rawError = data?.error ?? data?.['Error Message'] ?? data?.Note ?? data?.Information;
   const error = typeof rawError === 'string' && rawError.toLowerCase().includes('rate limit')
     ? 'Rate limited'
     : rawError;
   const value = !error && data ? parse(data) : null;
 
+  const titleEl =
+    sourceLink?.href ? (
+      <a
+        href={sourceLink.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="metric-title metric-title-link"
+        title="Open source data"
+      >
+        {title}
+      </a>
+    ) : (
+      <span className="metric-title">{title}</span>
+    );
+
   return (
     <article className="metric-card">
-      <div className="metric-header">
-        <span className="metric-title">{title}</span>
-      </div>
+      <div className="metric-header">{titleEl}</div>
       <div className="metric-value">
         {error ? (
           <span className="error">{error}</span>
@@ -33,6 +47,7 @@ export default function MetricCard({ title, data, parse, change, details }) {
           {details.map((item) => {
             const ch = item.change;
             const plain = item.value;
+            const trend = item.trend;
             const detailText =
               ch != null
                 ? `${ch.dir === 'up' ? '↑' : '↓'} $${ch.amt}`
@@ -47,6 +62,10 @@ export default function MetricCard({ title, data, parse, change, details }) {
                     <span
                       className={`metric-change metric-change-${ch.dir === 'up' ? 'up' : 'down'}`}
                     >
+                      {detailText}
+                    </span>
+                  ) : trend && plain != null ? (
+                    <span className={`metric-detail-trend metric-detail-trend--${trend}`}>
                       {detailText}
                     </span>
                   ) : (

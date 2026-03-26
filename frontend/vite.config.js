@@ -9,4 +9,11 @@ export default defineConfig({
       '/api': 'http://localhost:3001',
     },
   },
+  // `vite preview` does not inherit `server.proxy` — without this, /api/* returns 404 locally.
+  preview: {
+    port: 3000,
+    proxy: {
+      '/api': 'http://localhost:3001',
+    },
+  },
 });
