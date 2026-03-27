@@ -241,7 +241,17 @@ function App() {
   const base = apiBase ? `${apiBase}/api` : '/api';
 
   const fetchGasAll = useCallback(async () => {
-    const gasAll = await fetch(`${base}/gas/all`).then((r) => r.json());
+    const r = await fetch(`${base}/gas/all`);
+    const text = await r.text();
+    let gasAll = null;
+    try {
+      gasAll = text ? JSON.parse(text) : null;
+    } catch {
+      gasAll = { error: 'Invalid response from gas API', details: text ? text.slice(0, 200) : `HTTP ${r.status}` };
+    }
+    if (!r.ok && !gasAll?.error) {
+      gasAll = { error: 'Gas request failed', details: `HTTP ${r.status}` };
+    }
     const gasErr = gasAll?.error ? { error: gasAll.error, details: gasAll.details } : null;
     return {
       gas: gasErr ?? gasAll?.gas ?? { error: 'Gas data missing' },

@@ -1304,8 +1304,41 @@ async function fetchAaaHtml(url) {
   return resFetch.text();
 }
 
+function looksLikeBotBlock(html) {
+  const s = String(html || '');
+  if (!s) return false;
+  const h = s.toLowerCase();
+  return (
+    h.includes('access denied') ||
+    h.includes('captcha') ||
+    h.includes('cf-turnstile') ||
+    h.includes('cloudflare') ||
+    h.includes('attention required') ||
+    h.includes('verify you are human') ||
+    h.includes('bot detection') ||
+    h.includes('unusual traffic')
+  );
+}
+
+function hasAnyNumericPrice(rows) {
+  if (!Array.isArray(rows) || !rows.length) return false;
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue;
+    for (const k of ['regular', 'midGrade', 'premium', 'diesel']) {
+      const v = r[k];
+      if (v == null) continue;
+      const n = Number.parseFloat(String(v).replace(/[^0-9.]/g, ''));
+      if (Number.isFinite(n) && n > 0) return true;
+    }
+  }
+  return false;
+}
+
 
 function parseGasTableFromHtml(html) {
+  if (looksLikeBotBlock(html)) {
+    return { error: 'AAA blocked automated requests', details: 'Upstream returned a bot-check page.' };
+  }
   const $ = cheerio.load(html);
   const rowLabels = ['current', 'yesterday', 'weekAgo', 'monthAgo', 'yearAgo'];
   const colKeys = ['regular', 'midGrade', 'premium', 'diesel'];
@@ -1331,11 +1364,20 @@ function parseGasTableFromHtml(html) {
     }
     rows.push(row);
   }
+  if (!hasAnyNumericPrice(rows)) {
+    return {
+      error: 'AAA gas prices unavailable',
+      details: 'Could not extract prices (AAA page layout changed or upstream blocked this server).',
+    };
+  }
   return { rows };
 }
 
 /** Charlotte metro table from NC state page HTML (same URL as state-level scrape). */
 function parseCharlotteFromNcHtml(html) {
+  if (looksLikeBotBlock(html)) {
+    return { error: 'AAA blocked automated requests', details: 'Upstream returned a bot-check page.' };
+  }
   const $ = cheerio.load(html);
   const rowLabels = ['current', 'yesterday', 'weekAgo', 'monthAgo', 'yearAgo'];
   const colKeys = ['regular', 'midGrade', 'premium', 'diesel'];
@@ -1368,6 +1410,12 @@ function parseCharlotteFromNcHtml(html) {
       row[colKeys[c]] = match ? match[1] : null;
     }
     rows.push(row);
+  }
+  if (!hasAnyNumericPrice(rows)) {
+    return {
+      error: 'AAA Charlotte gas prices unavailable',
+      details: 'Could not extract prices (AAA page layout changed or upstream blocked this server).',
+    };
   }
   return { rows };
 }
